@@ -6,5 +6,5 @@ const (
 	LogLevelWarning string = "warn"
 	LogLevelError   string = "error"
 
-	LogFilePath string = "math-game/log/log_output.txt"
+	LogFilePath string = "raid-simulator/log/log_output.txt"
 )

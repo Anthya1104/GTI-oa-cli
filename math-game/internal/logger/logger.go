@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Anthya1104/go-cli-base/pkg/config"
+	"github.com/Anthya1104/math-game-cli/internal/config"
 	"github.com/sirupsen/logrus"
 )
 

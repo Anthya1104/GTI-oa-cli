@@ -3,9 +3,9 @@ package main
 import (
 	"os"
 
-	"github.com/Anthya1104/go-cli-base/pkg/cobra"
-	"github.com/Anthya1104/go-cli-base/pkg/config"
-	"github.com/Anthya1104/go-cli-base/pkg/logger"
+	"github.com/Anthya1104/raid-simulator/internal/cobra"
+	"github.com/Anthya1104/raid-simulator/internal/config"
+	"github.com/Anthya1104/raid-simulator/internal/logger"
 	"github.com/sirupsen/logrus"
 )
 

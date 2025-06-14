@@ -26,7 +26,7 @@
             "request": "launch",
             "mode": "auto",
             "program": "./raid-simulator/cmd/main.go",
-            "cwd": "${workspaceFolder}/quorum-election",
+            "cwd": "${workspaceFolder}/raid-simulator",
         }
     ]
 }

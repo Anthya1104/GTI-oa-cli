@@ -6,11 +6,19 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+type RoundResult struct {
+	Student *Student
+	Answer  int
+}
+
 type Game struct {
 	Students  []*Student
 	Teacher   *Teacher
-	Questions []*Question
+	Questions []*Question // TODO: refactor as chan to expand for bonus ii
 	MaxRounds int
+
+	// recourd the winner and answer
+	Results []RoundResult
 }
 
 func (g *Game) Start() {
@@ -24,17 +32,17 @@ func (g *Game) Start() {
 			continue
 		}
 		g.Questions = append(g.Questions, q)
-		g.playRound(q)
+		g.PlayRound(q)
 	}
 }
 
-func (g *Game) playRound(q *Question) {
+func (g *Game) PlayRound(q *Question) {
 	logrus.Infof("Teacher: %s", q)
 
 	answerCh := make(chan AnswerEvent, len(g.Students))
 
 	for _, s := range g.Students {
-		go askStudent(s, q, answerCh)
+		go AskStudent(s, q, answerCh)
 	}
 
 	// wait for the first student to answer
@@ -43,6 +51,7 @@ func (g *Game) playRound(q *Question) {
 	logrus.Infof("%s answered %d", first.Student.Name, first.Answer)
 
 	if first.Answer == q.Answer {
+		g.Results = append(g.Results, RoundResult{Student: first.Student, Answer: first.Answer})
 		logrus.Infof("Teacher: %s, you're right!", first.Student.Name)
 	} else {
 		logrus.Infof("Teacher: %s, wrong answer!", first.Student.Name)
@@ -56,7 +65,8 @@ func (g *Game) playRound(q *Question) {
 	}
 }
 
-func askStudent(s *Student, q *Question, ch chan AnswerEvent) {
+// TODO: could do interface extracting if multiple student types are required
+var AskStudent = func(s *Student, q *Question, ch chan AnswerEvent) {
 	time.Sleep(s.WaitTime)
 
 	ch <- AnswerEvent{

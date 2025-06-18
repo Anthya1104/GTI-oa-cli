@@ -1,6 +1,10 @@
 package raid
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/sirupsen/logrus"
+)
 
 type RAID1Controller struct {
 	disks []*Disk
@@ -45,4 +49,27 @@ func (r *RAID1Controller) ClearDisk(index int) error {
 	}
 	r.disks[index].Data = [][]byte{}
 	return nil
+}
+
+func Raid1SimulationFlow(input string, diskCount int, clearTarget int) {
+	raid := NewRAID1Controller(diskCount)
+	raid.Write([]byte(input))
+	logrus.Infof("[RAID1] Write done: %s", input)
+
+	output, err := raid.Read(0, len(input))
+	if err != nil {
+		logrus.Errorf("[RAID1] Read failed: %v", err)
+	} else {
+		logrus.Infof("[RAID1] Recovered string before clear: %s", string(output))
+	}
+
+	raid.ClearDisk(clearTarget)
+	logrus.Infof("[RAID1] Disk 0 cleared")
+
+	output, err = raid.Read(0, len(input))
+	if err != nil {
+		logrus.Errorf("[RAID1] Read failed after clear: %v", err)
+	} else {
+		logrus.Infof("[RAID1] Recovered string after clear: %s", string(output))
+	}
 }

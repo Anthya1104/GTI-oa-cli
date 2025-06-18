@@ -1,6 +1,10 @@
 package raid
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/sirupsen/logrus"
+)
 
 // RAID0
 // data would be splitted into to multiple disks
@@ -71,4 +75,30 @@ func (r *RAID0Controller) ClearDisk(index int) error {
 	}
 	r.disks[index].Data = [][]byte{}
 	return nil
+}
+
+func Raid0SimulationFlow(input string, diskCount int, stripeSz int, clearTarget int) {
+	raid := NewRAID0Controller(diskCount, stripeSz)
+	raid.Write([]byte(input))
+	logrus.Infof("[RAID0] Write done: %s", input)
+
+	// First read
+	output, err := raid.Read(0, len(input))
+	if err != nil {
+		logrus.Errorf("[RAID0] Read failed: %v", err)
+	} else {
+		logrus.Infof("[RAID0] Recovered string before clear: %s", string(output))
+	}
+
+	// Clear disk
+	raid.ClearDisk(1)
+	logrus.Infof("[RAID0] Disk 1 cleared")
+
+	// Read again
+	output, err = raid.Read(0, len(input))
+	if err != nil {
+		logrus.Errorf("[RAID0] Read failed after clear: %v", err)
+	} else {
+		logrus.Infof("[RAID0] Recovered string after clear: %s", string(output))
+	}
 }

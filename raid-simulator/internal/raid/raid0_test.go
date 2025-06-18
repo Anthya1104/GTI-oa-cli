@@ -58,7 +58,14 @@ func TestRAID0_ReadOffsetInsideStripe(t *testing.T) {
 	err := r.Write(data, 0)
 	assert.NoError(t, err)
 
-	read, err := r.Read(2, 4) // Expecting "CDEF"
+	read, err := r.Read(2, 4) // Expecting "CD"
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("CD"), read)
+}
+
+func TestRAID0_WriteTooShortData_Fail(t *testing.T) {
+	r := raid.NewRAID0Controller(3, 4)
+	data := []byte("AB")
+	err := r.Write(data, 0)
+	assert.Error(t, err)
 }

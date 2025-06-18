@@ -6,6 +6,7 @@ type RaidType string
 
 var (
 	RaidTypeRaid0 RaidType = "raid0"
+	RaidTypeRaid1 RaidType = "raid1"
 )
 
 // Simulate single Disk
@@ -46,6 +47,27 @@ func RunRAIDSimulation(raidType RaidType, input string) {
 			logrus.Errorf("[RAID0] Read failed after clear: %v", err)
 		} else {
 			logrus.Infof("[RAID0] Recovered string after clear: %s", string(output))
+		}
+	case RaidTypeRaid1:
+		raid := NewRAID1Controller(2)
+		raid.Write([]byte(input))
+		logrus.Infof("[RAID1] Write done: %s", input)
+
+		output, err := raid.Read(0, len(input))
+		if err != nil {
+			logrus.Errorf("[RAID1] Read failed: %v", err)
+		} else {
+			logrus.Infof("[RAID1] Recovered string before clear: %s", string(output))
+		}
+
+		raid.ClearDisk(0)
+		logrus.Infof("[RAID1] Disk 0 cleared")
+
+		output, err = raid.Read(0, len(input))
+		if err != nil {
+			logrus.Errorf("[RAID1] Read failed after clear: %v", err)
+		} else {
+			logrus.Infof("[RAID1] Recovered string after clear: %s", string(output))
 		}
 	default:
 		logrus.Warnf("Unsupported RAID type: %s", raidType)

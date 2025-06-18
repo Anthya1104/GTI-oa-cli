@@ -10,7 +10,7 @@ import (
 func TestRAID0_WriteAndRead_Success(t *testing.T) {
 	r := raid.NewRAID0Controller(3, 4)
 	data := []byte("ABCDEFGH")
-	err := r.Write(data, 0, 0)
+	err := r.Write(data, 0)
 	assert.NoError(t, err)
 
 	read, err := r.Read(0, len(data))
@@ -21,7 +21,7 @@ func TestRAID0_WriteAndRead_Success(t *testing.T) {
 func TestRAID0_ReadAfterClear_Fail(t *testing.T) {
 	r := raid.NewRAID0Controller(3, 4)
 	data := []byte("ABCDEFGHIJK")
-	err := r.Write(data, 0, 0)
+	err := r.Write(data, 0)
 	assert.NoError(t, err)
 
 	err = r.ClearDisk(0)
@@ -44,7 +44,7 @@ func TestRAID0_ClearInvalidDisk(t *testing.T) {
 func TestRAID0_ReadPartialStripe(t *testing.T) {
 	r := raid.NewRAID0Controller(3, 4)
 	data := []byte("ABCDEF")
-	err := r.Write(data, 0, 0)
+	err := r.Write(data, 0)
 	assert.NoError(t, err)
 
 	read, err := r.Read(0, 3)
@@ -55,7 +55,7 @@ func TestRAID0_ReadPartialStripe(t *testing.T) {
 func TestRAID0_ReadOffsetInsideStripe(t *testing.T) {
 	r := raid.NewRAID0Controller(3, 4)
 	data := []byte("ABCDEFGH")
-	err := r.Write(data, 0, 0)
+	err := r.Write(data, 0)
 	assert.NoError(t, err)
 
 	read, err := r.Read(2, 4) // Expecting "CDEF"

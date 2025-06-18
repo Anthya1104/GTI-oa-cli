@@ -27,7 +27,8 @@ func NewRAID0Controller(diskCount int, stripeSize int) *RAID0Controller {
 	}
 }
 
-func (r *RAID0Controller) Write(data []byte, offset, diskIndex int) error {
+func (r *RAID0Controller) Write(data []byte, offset int) error {
+	diskIndex := 0
 	for offset < len(data) {
 		end := offset + r.stripeSz
 		if end > len(data) {
@@ -77,7 +78,7 @@ func (r *RAID0Controller) ClearDisk(index int) error {
 
 func Raid0SimulationFlow(input string, diskCount int, stripeSz int, clearTarget int) {
 	raid := NewRAID0Controller(diskCount, stripeSz)
-	raid.Write([]byte(input), initialOffset, initialDiskIndex)
+	raid.Write([]byte(input), initialOffset)
 	logrus.Infof("[RAID0] Write done: %s", input)
 
 	// First read

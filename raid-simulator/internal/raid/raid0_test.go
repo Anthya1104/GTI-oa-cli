@@ -13,7 +13,7 @@ func TestRAID0_WriteAndRead_Success(t *testing.T) {
 	err := r.Write(data, 0, 0)
 	assert.NoError(t, err)
 
-	read, err := r.Read(0, len(data), 0, 0)
+	read, err := r.Read(0, len(data))
 	assert.NoError(t, err)
 	assert.Equal(t, data, read)
 }
@@ -27,7 +27,7 @@ func TestRAID0_ReadAfterClear_Fail(t *testing.T) {
 	err = r.ClearDisk(0)
 	assert.NoError(t, err)
 
-	read, err := r.Read(0, len(data), 0, 0)
+	read, err := r.Read(0, len(data))
 	assert.Error(t, err)
 	assert.Nil(t, read)
 }
@@ -47,7 +47,7 @@ func TestRAID0_ReadPartialStripe(t *testing.T) {
 	err := r.Write(data, 0, 0)
 	assert.NoError(t, err)
 
-	read, err := r.Read(0, 3, 0, 0)
+	read, err := r.Read(0, 3)
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("ABC"), read)
 }
@@ -58,7 +58,7 @@ func TestRAID0_ReadOffsetInsideStripe(t *testing.T) {
 	err := r.Write(data, 0, 0)
 	assert.NoError(t, err)
 
-	read, err := r.Read(2, 4, 0, 0) // Expecting "CDEF"
+	read, err := r.Read(2, 4) // Expecting "CDEF"
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("CD"), read)
 }

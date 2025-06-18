@@ -2,6 +2,11 @@ package raid
 
 import "github.com/sirupsen/logrus"
 
+const (
+	initialOffset    = 0
+	initialDiskIndex = 0
+)
+
 type RaidType string
 
 var (
@@ -25,9 +30,14 @@ type RAIDController interface {
 func RunRAIDSimulation(raidType RaidType, input string) {
 	switch raidType {
 	case RaidTypeRaid0:
-		Raid0SimulationFlow(input, 3, 4, 1)
+		diskCount := 3
+		stripeSz := 4
+		clearTarget := 1
+		Raid0SimulationFlow(input, diskCount, stripeSz, clearTarget)
 	case RaidTypeRaid1:
-		Raid1SimulationFlow(input, 2, 0)
+		diskCount := 2
+		clearTarget := 0
+		Raid1SimulationFlow(input, diskCount, clearTarget)
 	default:
 		logrus.Warnf("Unsupported RAID type: %s", raidType)
 	}

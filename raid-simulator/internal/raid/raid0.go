@@ -42,7 +42,9 @@ func (r *RAID0Controller) Write(data []byte, offset, diskIndex int) error {
 	return nil
 }
 
-func (r *RAID0Controller) Read(start, length, readCount, stripeCount int) ([]byte, error) {
+func (r *RAID0Controller) Read(start, length int) ([]byte, error) {
+	readCount := 0
+	stripeCount := 0
 	result := make([]byte, 0, length)
 	totalStripes := (start + length + r.stripeSz - 1) / r.stripeSz
 	for stripeCount < totalStripes {
@@ -75,11 +77,11 @@ func (r *RAID0Controller) ClearDisk(index int) error {
 
 func Raid0SimulationFlow(input string, diskCount int, stripeSz int, clearTarget int) {
 	raid := NewRAID0Controller(diskCount, stripeSz)
-	raid.Write([]byte(input), 0, 0)
+	raid.Write([]byte(input), initialOffset, initialDiskIndex)
 	logrus.Infof("[RAID0] Write done: %s", input)
 
 	// First read
-	output, err := raid.Read(0, len(input), 0, 0)
+	output, err := raid.Read(0, len(input))
 	if err != nil {
 		logrus.Errorf("[RAID0] Read failed: %v", err)
 	} else {
@@ -91,7 +93,7 @@ func Raid0SimulationFlow(input string, diskCount int, stripeSz int, clearTarget 
 	logrus.Infof("[RAID0] Disk 1 cleared")
 
 	// Read again
-	output, err = raid.Read(0, len(input), 0, 0)
+	output, err = raid.Read(0, len(input))
 	if err != nil {
 		logrus.Errorf("[RAID0] Read failed after clear: %v", err)
 	} else {

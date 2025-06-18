@@ -28,6 +28,10 @@ func NewRAID0Controller(diskCount int, stripeSize int) *RAID0Controller {
 }
 
 func (r *RAID0Controller) Write(data []byte, offset int) error {
+	if len(data) < r.stripeSz {
+		return fmt.Errorf("data length: %v should larger than stripe size: %v", len(data), r.stripeSz)
+	}
+
 	diskIndex := 0
 	for offset < len(data) {
 		end := offset + r.stripeSz

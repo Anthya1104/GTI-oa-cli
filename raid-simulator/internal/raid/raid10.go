@@ -31,6 +31,9 @@ func NewRAID10Controller(totalDisks int, stripeSz int) *RAID10Controller {
 }
 
 func (r *RAID10Controller) Write(data []byte, offset int) error {
+	if len(data) < r.stripeSz {
+		return fmt.Errorf("data length: %v should larger than stripe size: %v", len(data), r.stripeSz)
+	}
 	mirrorIndex := 0
 	for offset < len(data) {
 		end := offset + r.stripeSz

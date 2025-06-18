@@ -9,8 +9,9 @@ const (
 type RaidType string
 
 var (
-	RaidTypeRaid0 RaidType = "raid0"
-	RaidTypeRaid1 RaidType = "raid1"
+	RaidTypeRaid0  RaidType = "raid0"
+	RaidTypeRaid1  RaidType = "raid1"
+	RaidTypeRaid10 RaidType = "raid10"
 )
 
 // Simulate single Disk
@@ -37,6 +38,11 @@ func RunRAIDSimulation(raidType RaidType, input string) {
 		diskCount := 2
 		clearTarget := 0
 		Raid1SimulationFlow(input, diskCount, clearTarget)
+	case RaidTypeRaid10:
+		totalDisks := 4
+		stripeSz := 4
+		clearTarget := 2
+		Raid10SimulationFlow(input, totalDisks, stripeSz, clearTarget)
 	default:
 		logrus.Warnf("Unsupported RAID type: %s", raidType)
 	}

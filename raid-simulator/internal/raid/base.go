@@ -3,8 +3,7 @@ package raid
 import "github.com/sirupsen/logrus"
 
 const (
-	initialOffset    = 0
-	initialDiskIndex = 0
+	initialOffset = 0
 )
 
 type RaidType string

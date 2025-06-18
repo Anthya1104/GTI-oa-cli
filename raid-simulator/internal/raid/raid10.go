@@ -57,13 +57,14 @@ func (r *RAID10Controller) Write(data []byte, offset int) error {
 
 func (r *RAID10Controller) Read(start, length int) ([]byte, error) {
 	result := make([]byte, 0, length)
-	readCount := 0
-	stripeCount := 0
-	totalStripes := (start + length + r.stripeSz - 1) / r.stripeSz
+	end := start + length
 
-	for stripeCount < totalStripes {
-		mirror := r.mirrors[stripeCount%len(r.mirrors)]
-		chunkIndex := stripeCount / len(r.mirrors)
+	for i := start; i < end; {
+		stripeIdx := i / r.stripeSz
+		offsetInStripe := i % r.stripeSz
+
+		mirror := r.mirrors[stripeIdx%len(r.mirrors)]
+		chunkIndex := stripeIdx / len(r.mirrors)
 
 		var chunk []byte
 		for _, disk := range mirror {
@@ -73,20 +74,23 @@ func (r *RAID10Controller) Read(start, length int) ([]byte, error) {
 			}
 		}
 		if chunk == nil {
-			return nil, fmt.Errorf("missing stripe at mirror %d", stripeCount%len(r.mirrors))
+			return nil, fmt.Errorf("missing stripe at mirror %d", stripeIdx%len(r.mirrors))
 		}
 
-		remain := length - readCount
-		if remain >= len(chunk) {
-			result = append(result, chunk...)
-			readCount += len(chunk)
-		} else {
-			result = append(result, chunk[:remain]...)
-			readCount += remain
+		remain := end - i
+		if offsetInStripe >= len(chunk) {
+			return nil, fmt.Errorf("invalid offset in stripe")
 		}
-		stripeCount++
+		readLen := r.stripeSz - offsetInStripe
+		if readLen > remain {
+			readLen = remain
+		}
+
+		result = append(result, chunk[offsetInStripe:offsetInStripe+readLen]...)
+		i += readLen
 	}
-	return result[start%r.stripeSz:], nil
+
+	return result, nil
 }
 
 func (r *RAID10Controller) ClearDisk(index int) error {

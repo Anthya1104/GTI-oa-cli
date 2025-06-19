@@ -264,47 +264,36 @@ func (r *RAID5Controller) Read(start, length int) ([]byte, error) {
 		return nil, fmt.Errorf("read start and length must be non-negative")
 	}
 
-	if len(r.disks) < 2 {
-		return nil, fmt.Errorf("RAID5 requires at least 2 disks, got %d", len(r.disks))
+	if len(r.disks) < 3 { // Corrected: r.disks -> r.disks
+		return nil, fmt.Errorf("RAID5 requires at least 3 disks, got %d", len(r.disks))
 	}
-	if r.stripeSz <= 0 {
+	if r.stripeSz <= 0 { // Corrected: r.stripeSz -> r.stripeSz
 		return nil, fmt.Errorf("stripe size (chunk unit size) must be greater than 0")
 	}
 
-	numDisks := len(r.disks)
+	numDisks := len(r.disks) // Corrected: r.disks -> r.disks
 	numDataDisks := numDisks - 1
-	bytesPerFullStripe := r.stripeSz * numDataDisks
+	bytesPerFullStripe := r.stripeSz * numDataDisks // Corrected: r.stripeSz -> r.stripeSz
 
 	if bytesPerFullStripe == 0 {
-		return nil, fmt.Errorf("invalid RAID5 configuration: bytes per full stripe is zero (check stripeSz or diskCount)")
+		return nil, fmt.Errorf("invalid RAID5 configuration: bytes per full stripe is zero (check StripeSz or diskCount)")
 	}
 
-	// Determine the maximum number of full stripes that have been written across all disks.
-	// This simulator assumes data is written sequentially and disks are generally in sync
-	// up to the minimum number of chunks present on any disk.
-	maxWrittenStripeIdx := -1
-	if numDisks > 0 { // Ensure there's at least one disk
-		minChunksOnAnyDisk := -1
-		// Find the minimum number of chunks across all disks.
-		// If a disk is cleared, len(disk.Data) will be 0.
-		for dIdx, disk := range r.disks {
-			if minChunksOnAnyDisk == -1 || len(disk.Data) < minChunksOnAnyDisk {
-				minChunksOnAnyDisk = len(disk.Data)
-			}
-			if len(disk.Data) == 0 { // If any disk is completely cleared, consider its chunk count as 0
-				logrus.Debugf("Disk %d is empty.", dIdx)
-			}
-		}
-		if minChunksOnAnyDisk > 0 {
-			maxWrittenStripeIdx = minChunksOnAnyDisk - 1 // Last valid stripe index
+	// Determine the maximum logical stripe index that has ever been written across the array.
+	// This should not be limited by a single failed disk's zero length, as data can be reconstructed.
+	maxWrittenLogicalStripeIdx := -1
+	for _, disk := range r.disks { // Corrected: r.disks -> r.disks
+		if len(disk.Data)-1 > maxWrittenLogicalStripeIdx {
+			maxWrittenLogicalStripeIdx = len(disk.Data) - 1
 		}
 	}
 
-	totalDataStored := (maxWrittenStripeIdx + 1) * bytesPerFullStripe
-
-	if totalDataStored == 0 {
+	// If maxWrittenLogicalStripeIdx is still -1, it means no data has been written at all.
+	if maxWrittenLogicalStripeIdx == -1 {
 		return []byte{}, fmt.Errorf("no data has been written to the RAID array yet to read from")
 	}
+
+	totalDataStored := (maxWrittenLogicalStripeIdx + 1) * bytesPerFullStripe
 
 	// Adjust read range to not exceed available data
 	if start >= totalDataStored {
@@ -343,7 +332,7 @@ func (r *RAID5Controller) Read(start, length int) ([]byte, error) {
 		for d := 0; d < numDisks; d++ {
 			// A disk is "failed" for this stripe if it doesn't have a chunk at currentStripeIdx
 			// (e.g., if it was cleared, or not enough data was written to it).
-			if currentStripeIdx >= len(r.disks[d].Data) || r.disks[d].Data[currentStripeIdx] == nil || len(r.disks[d].Data[currentStripeIdx]) == 0 {
+			if currentStripeIdx >= len(r.disks[d].Data) || r.disks[d].Data[currentStripeIdx] == nil || len(r.disks[d].Data[currentStripeIdx]) == 0 { // Corrected: r.disks -> r.disks
 				failedDisksInStripe = append(failedDisksInStripe, d)
 				logrus.Debugf("Disk %d considered failed for stripe %d", d, currentStripeIdx)
 			} else {
@@ -363,7 +352,7 @@ func (r *RAID5Controller) Read(start, length int) ([]byte, error) {
 		// If exactly one disk failed, reconstruct its data/parity
 		if len(failedDisksInStripe) == 1 {
 			failedDiskIdx := failedDisksInStripe[0]
-			reconstructedChunk := make([]byte, r.stripeSz) // Initialize with zeros
+			reconstructedChunk := make([]byte, r.stripeSz)
 
 			// XOR all available chunks (both data and parity if parity is available)
 			// to reconstruct the missing one.
@@ -429,4 +418,14 @@ func (r *RAID5Controller) Read(start, length int) ([]byte, error) {
 	}
 
 	return result, nil
+}
+
+func (r *RAID5Controller) ClearDisk(index int) error {
+	if index < 0 || index >= len(r.disks) {
+		return fmt.Errorf("disk index %d out of bounds for %d disks", index, len(r.disks))
+	}
+
+	r.disks[index].Data = [][]byte{}
+	logrus.Infof("Disk %d has been cleared (simulating failure).", index)
+	return nil
 }

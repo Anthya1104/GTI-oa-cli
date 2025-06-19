@@ -198,16 +198,32 @@ func TestRAID5_Write_PartialStripe_RMW(t *testing.T) {
 }
 
 func TestRAID5_WriteAndRead_Success(t *testing.T) {
-	r, err := NewRAID5Controller(3, 1)
-	assert.NoError(t, err)
 
-	data := []byte("ABCDEFGH") // 8 bytes
-	err = r.Write(data, 0)
-	assert.NoError(t, err)
+	t.Run("WriteAndRead_Without_Partial_Writing", func(t *testing.T) {
+		r, err := NewRAID5Controller(3, 1)
+		assert.NoError(t, err)
 
-	read, err := r.Read(0, len(data))
-	assert.NoError(t, err)
-	assert.Equal(t, data, read)
+		data := []byte("ABCDEFGH") // 8 bytes
+		err = r.Write(data, 0)
+		assert.NoError(t, err)
+
+		read, err := r.Read(0, len(data))
+		assert.NoError(t, err)
+		assert.Equal(t, data, read)
+	})
+
+	t.Run("WriteAndRead_With_Partial_Writing", func(t *testing.T) {
+		r, err := NewRAID5Controller(3, 1)
+		assert.NoError(t, err)
+
+		data := []byte("ABCDEFG") // 7 bytes
+		err = r.Write(data, 0)
+		assert.NoError(t, err)
+
+		read, err := r.Read(0, len(data))
+		assert.NoError(t, err)
+		assert.Equal(t, data, read)
+	})
 }
 
 func TestRAID5_Read_Success(t *testing.T) {

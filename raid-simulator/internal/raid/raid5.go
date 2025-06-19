@@ -396,3 +396,32 @@ func (r *RAID5Controller) ClearDisk(index int) error {
 	logrus.Infof("Disk %d has been cleared (simulating failure).", index)
 	return nil
 }
+
+func Raid5SimulationFlow(input string, diskCount int, stripeSz int, clearTarget int) {
+	raid, err := NewRAID5Controller(diskCount, stripeSz)
+	if err != nil {
+		logrus.Errorf("[RAID5] Init Raid5 controller failed: %v", err)
+	}
+	raid.Write([]byte(input), initialOffset)
+	logrus.Infof("[RAID5] Write done: %s", input)
+
+	// First read
+	output, err := raid.Read(0, len(input))
+	if err != nil {
+		logrus.Errorf("[RAID5] Read failed: %v", err)
+	} else {
+		logrus.Infof("[RAID5] Recovered string before clear: %s", string(output))
+	}
+
+	// Clear disk
+	raid.ClearDisk(1)
+	logrus.Infof("[RAID5] Disk 1 cleared")
+
+	// Read again
+	output, err = raid.Read(0, len(input))
+	if err != nil {
+		logrus.Errorf("[RAID5] Read failed after clear: %v", err)
+	} else {
+		logrus.Infof("[RAID5] Recovered string after clear: %s", string(output))
+	}
+}

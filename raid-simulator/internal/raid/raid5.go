@@ -38,25 +38,33 @@ func (r *RAID5Controller) Write(data []byte, offset int) error {
 		return fmt.Errorf("stripe size (chunk unit size) must be greater than 0")
 	}
 
-	numDisks := len(r.disks)     // Total number of disks in the array
-	numDataDisks := numDisks - 1 // Number of disks that hold actual data chunks in a stripe
+	numDisks := len(r.disks)
+	numDataDisks := numDisks - 1
 
-	// RAID5 stripe across all data disks (excluding the parity block).
 	bytesPerFullStripe := r.stripeSz * numDataDisks
 
-	// Calculate how many complete RAID5 stripes can be written from the input `data`.
 	fullStripesCount := len(data) / bytesPerFullStripe
 	remainingBytes := len(data) % bytesPerFullStripe
 
-	currentDataOffset := 0 // Tracks the current read position in the input `data` byte slice
+	currentDataOffsetInInput := 0
 
 	// Iterate through each full RAID5 stripe that can be formed from the input data
 	for i := 0; i < fullStripesCount; i++ {
-		stripeData := data[currentDataOffset : currentDataOffset+bytesPerFullStripe]
-		parityDiskIdx := i % numDisks
+		currentAbsoluteStripeIdx := (offset / bytesPerFullStripe) + i
+
+		stripeData := data[currentDataOffsetInInput : currentDataOffsetInInput+bytesPerFullStripe]
+
+		parityDiskIdx := currentAbsoluteStripeIdx % numDisks
 
 		chunksForThisStripe := make([][]byte, numDisks)
 		dataChunkIndexInStripe := 0 // Counter for which data chunk (0 to numDataDisks-1) we are processing within this stripe
+
+		for d := 0; d < numDisks; d++ {
+			for currentAbsoluteStripeIdx >= len(r.disks[d].Data) {
+				r.disks[d].Data = append(r.disks[d].Data, make([]byte, r.stripeSz))
+			}
+		}
+		// MODIFICATION END
 
 		// Distribute data chunks from `stripeData` to the appropriate data disks
 		for d := 0; d < numDisks; d++ {
@@ -64,26 +72,31 @@ func (r *RAID5Controller) Write(data []byte, offset int) error {
 				continue // Skip the disk designated for parity in this stripe
 			}
 
+			// Calculate the start and end byte indices for the current data chunk within `stripeData`.
 			chunkStart := dataChunkIndexInStripe * r.stripeSz
 			chunkEnd := chunkStart + r.stripeSz
+
+			// For full stripes, `chunkEnd` should always be within `stripeData`'s length.
 			if chunkEnd > len(stripeData) {
 				chunkEnd = len(stripeData)
 			}
-
+			// If we've already extracted all available data from `stripeData`, exit the loop.
 			if chunkStart >= len(stripeData) {
 				break
 			}
 
+			// Create a new byte slice for the chunk and copy the data.
+			// This is crucial to prevent memory aliasing issues where multiple disk `Data` slices
+			// might point to the same underlying array segment.
 			chunk := make([]byte, r.stripeSz)
 			copy(chunk, stripeData[chunkStart:chunkEnd])
 
 			chunksForThisStripe[d] = chunk
-			r.disks[d].Data = append(r.disks[d].Data, chunk)
+			r.disks[d].Data[currentAbsoluteStripeIdx] = chunk
 			dataChunkIndexInStripe++
 		}
 
 		// Calculate the parity for the current stripe.
-		// The parity chunk will have the same size as a data chunk (`r.stripeSz`).
 		parityChunk := make([]byte, r.stripeSz)
 		for byteIdx := 0; byteIdx < r.stripeSz; byteIdx++ {
 			for d := 0; d < numDisks; d++ {
@@ -98,64 +111,58 @@ func (r *RAID5Controller) Write(data []byte, offset int) error {
 		}
 
 		// Write the calculated parity chunk to the disk designated for parity in this stripe.
-		r.disks[parityDiskIdx].Data = append(r.disks[parityDiskIdx].Data, parityChunk)
+		r.disks[parityDiskIdx].Data[currentAbsoluteStripeIdx] = parityChunk
 
 		// Log informational details about the current stripe operation.
-		logrus.Debugf("[RAID5] stripe %d (data bytes %d-%d) - parityDisk: %d, chunks: %v, parity: %v",
-			i, currentDataOffset, currentDataOffset+bytesPerFullStripe-1, parityDiskIdx, chunksForThisStripe, parityChunk)
+		logrus.Debugf("[RAID5] stripe %d (absolute) - data bytes %d-%d (input data) - parityDisk: %d, chunks: %v, parity: %v",
+			currentAbsoluteStripeIdx, currentDataOffsetInInput, currentDataOffsetInInput+bytesPerFullStripe-1, parityDiskIdx, chunksForThisStripe, parityChunk)
 
-		currentDataOffset += bytesPerFullStripe // Advance the offset to the beginning of the next full stripe
+		currentDataOffsetInInput += bytesPerFullStripe // Advance the offset to the beginning of the next full stripe within the input data
 	}
 
-	// Start processing Partial Write (Read-Modify-Write)
 	if remainingBytes > 0 {
+		// Calculate the absolute stripe index for the partial write.
+		// This is the stripe immediately following the last full stripe written by this `Write` call,
+		// or the stripe indicated by `offset` if there were no full stripes.
+		absolutePartialStripeIndex := (offset + (fullStripesCount * bytesPerFullStripe)) / bytesPerFullStripe
 
-		absolutePartialStripeIndex := offset / bytesPerFullStripe
-
-		return r.handlePartialWrite(data, currentDataOffset, remainingBytes, absolutePartialStripeIndex)
+		return r.handlePartialWrite(data, currentDataOffsetInInput, remainingBytes, absolutePartialStripeIndex, offset)
 	}
 
 	return nil
 }
 
-func (r *RAID5Controller) handlePartialWrite(data []byte, currentDataOffset int, remainingBytes int, partialStripeIdx int) error {
-	logrus.Infof("RAID5: Handling partial write of %d bytes using Read-Modify-Write.", remainingBytes)
+func (r *RAID5Controller) handlePartialWrite(data []byte, partialDataOffsetInInput int, remainingBytes int, targetStripeIndex int, originalWriteOffset int) error {
+	logrus.Debugf("[RAID5] Handling partial write of %d bytes using Read-Modify-Write for absolute stripe index %d.", remainingBytes, targetStripeIndex)
 
 	numDisks := len(r.disks)
 	numDataDisks := numDisks - 1
 	bytesPerFullStripe := r.stripeSz * numDataDisks
 
-	// Ensure the disks are long enough to hold this partial stripe's data.
-	// If this is the very first write and it's a partial one, disks might be empty.
-	if partialStripeIdx >= len(r.disks[0].Data) {
-		// If it's a new stripe, initialize chunks with zeros to represent empty space
-		for _, disk := range r.disks {
-			disk.Data = append(disk.Data, make([]byte, r.stripeSz)) // Append zero-filled chunk
+	for d := 0; d < numDisks; d++ {
+		for targetStripeIndex >= len(r.disks[d].Data) {
+			r.disks[d].Data = append(r.disks[d].Data, make([]byte, r.stripeSz))
 		}
 	}
 
-	// 1. Read the affected stripe (current partialStripeIdx)
+	// 1. Read the affected stripe (targetStripeIndex)
 	currentStripeChunks := make([][]byte, numDisks)
 	var failedDiskInStripe int = -1 // Track a single failed disk for reconstruction
 
 	for d := 0; d < numDisks; d++ {
-		if partialStripeIdx < len(r.disks[d].Data) && r.disks[d].Data[partialStripeIdx] != nil && len(r.disks[d].Data[partialStripeIdx]) > 0 {
+		if targetStripeIndex < len(r.disks[d].Data) && r.disks[d].Data[targetStripeIndex] != nil && len(r.disks[d].Data[targetStripeIndex]) > 0 {
 			// Copy existing chunk data.
 			chunkCopy := make([]byte, r.stripeSz)
-			copy(chunkCopy, r.disks[d].Data[partialStripeIdx])
+			copy(chunkCopy, r.disks[d].Data[targetStripeIndex])
 			currentStripeChunks[d] = chunkCopy
 		} else {
-			// Disk is missing this chunk (e.g., cleared or not yet written to this depth).
-			// In a RMW, if a disk is truly failed, we'd reconstruct it first or rely on Read.
-			// For this simplified RMW, we assume data exists or can be reconstructed if one disk is down.
-			// If we find an empty slot, let's treat it as a potential failed disk for reconstruction logic
-			// if exactly one is found.
-			currentStripeChunks[d] = make([]byte, r.stripeSz) // Initialize with zeros if missing
+			// If a disk is truly failed (e.g., cleared), its Data[targetStripeIndex] might be nil or empty.
+			// Treat as a missing chunk for reconstruction.
+			currentStripeChunks[d] = make([]byte, r.stripeSz)
 			if failedDiskInStripe == -1 {
 				failedDiskInStripe = d
 			} else {
-				// More than one missing chunk in this stripe means unrecoverable for RMW
-				return fmt.Errorf("RAID5: Multiple disk failures detected in stripe %d during partial write RMW. Data unrecoverable", partialStripeIdx)
+				return fmt.Errorf("RAID5: Multiple disk failures (%v) detected in stripe %d during partial write RMW. Data unrecoverable", []int{failedDiskInStripe, d}, targetStripeIndex)
 			}
 		}
 	}
@@ -172,90 +179,62 @@ func (r *RAID5Controller) handlePartialWrite(data []byte, currentDataOffset int,
 			}
 		}
 		currentStripeChunks[failedDiskInStripe] = reconstructedChunk
-		logrus.Warnf("RAID5: Reconstructed existing data for disk %d in stripe %d for RMW.", failedDiskInStripe, partialStripeIdx)
+		logrus.Warnf("RAID5: Reconstructed existing data for disk %d in stripe %d for RMW.", failedDiskInStripe, targetStripeIndex)
 	}
 
-	// 2. Modify Data (overlay new partial data onto the existing data chunks)
+	// 2. Form a complete logical stripe buffer from currentStripeChunks and overlay newPartialData
+	// Create a full logical stripe from the read chunks (including reconstructed ones)
+	fullLogicalStripeBuffer := make([]byte, bytesPerFullStripe)
+	dataChunkCursor := 0
+	parityDiskIdxForThisStripe := targetStripeIndex % numDisks
 
-	newPartialData := data[currentDataOffset : currentDataOffset+remainingBytes]
-
-	dataChunkIdx := 0
-	bytesCopiedToStripe := 0
 	for d := 0; d < numDisks; d++ {
-		if d == partialStripeIdx%numDisks { // Skip the parity disk for this stripe
-			continue
+		if d == parityDiskIdxForThisStripe {
+			continue // Skip parity disk
 		}
-
-		// Calculate the logical offset within the `bytesPerFullStripe` for this chunk.
-		// This tells us where this chunk's data starts in the "virtual" full stripe.
-		logicalChunkStartInStripe := dataChunkIdx * r.stripeSz
-
-		// Determine how much of `newPartialData` will go into this data chunk.
-		copyStartInNewPartial := 0
-		if logicalChunkStartInStripe > len(newPartialData) {
-			// If this data chunk is entirely beyond the new partial data, skip.
-			dataChunkIdx++
-			continue
-		}
-		if currentDataOffset%bytesPerFullStripe > logicalChunkStartInStripe {
-			// Calculate how much we need to skip in `newPartialData`.
-			copyStartInNewPartial = currentDataOffset%bytesPerFullStripe - logicalChunkStartInStripe
-		}
-
-		// Determine how many bytes to copy into this chunk from `newPartialData`.
-		bytesToCopy := r.stripeSz - copyStartInNewPartial
-		if bytesToCopy > (len(newPartialData) - bytesCopiedToStripe) {
-			bytesToCopy = (len(newPartialData) - bytesCopiedToStripe)
-		}
-		if bytesToCopy <= 0 {
-			break // No more bytes to copy from newPartialData
-		}
-
-		if currentStripeChunks[d] == nil || len(currentStripeChunks[d]) < r.stripeSz {
-			currentStripeChunks[d] = make([]byte, r.stripeSz) // Initialize if not already
-		}
-
-		// Perform the overlay: copy new data into the relevant part of the existing chunk.
-		copy(currentStripeChunks[d][copyStartInNewPartial:copyStartInNewPartial+bytesToCopy], newPartialData[bytesCopiedToStripe:bytesCopiedToStripe+bytesToCopy])
-		bytesCopiedToStripe += bytesToCopy
-		dataChunkIdx++
+		// Copy the data chunk from currentStripeChunks into the logical buffer
+		copy(fullLogicalStripeBuffer[dataChunkCursor*r.stripeSz:(dataChunkCursor+1)*r.stripeSz], currentStripeChunks[d])
+		dataChunkCursor++
 	}
 
-	// 3. Recalculate Parity for the modified stripe
+	// Calculate the starting byte offset of the new partial data *within this specific target logical stripe*.
+	// This ensures it's placed correctly regardless of where the overall `Write` started.
+	startOffsetInTargetStripe := (originalWriteOffset + partialDataOffsetInInput) % bytesPerFullStripe
+
+	// Source data: data[partialDataOffsetInInput : partialDataOffsetInInput+remainingBytes]
+	// Destination: fullLogicalStripeBuffer
+	// Destination offset: startOffsetInTargetStripe
+	// Length: remainingBytes
+	copy(fullLogicalStripeBuffer[startOffsetInTargetStripe:startOffsetInTargetStripe+remainingBytes], data[partialDataOffsetInInput:partialDataOffsetInInput+remainingBytes])
+
+	// 3. Re-distribute modified data and Recalculate Parity
 	newParityChunk := make([]byte, r.stripeSz)
-	for byteIdx := 0; byteIdx < r.stripeSz; byteIdx++ {
-		for d := 0; d < numDisks; d++ {
-			if d == partialStripeIdx%numDisks { // Skip the parity disk
-				continue
-			}
-			if currentStripeChunks[d] != nil && len(currentStripeChunks[d]) > byteIdx {
-				newParityChunk[byteIdx] ^= currentStripeChunks[d][byteIdx]
-			}
+	dataChunkCursor = 0
+
+	for d := 0; d < numDisks; d++ {
+		if d == parityDiskIdxForThisStripe {
+			continue
 		}
+
+		newDataChunk := fullLogicalStripeBuffer[dataChunkCursor*r.stripeSz : (dataChunkCursor+1)*r.stripeSz]
+		currentStripeChunks[d] = newDataChunk
+
+		// Accumulate XOR for parity
+		for byteIdx := 0; byteIdx < r.stripeSz; byteIdx++ {
+			newParityChunk[byteIdx] ^= newDataChunk[byteIdx]
+		}
+		dataChunkCursor++
 	}
+
+	// Set the new parity chunk
+	currentStripeChunks[parityDiskIdxForThisStripe] = newParityChunk
 
 	// 4. Write new data chunks and new parity chunk back to disks
-	dataChunkIdx = 0
 	for d := 0; d < numDisks; d++ {
-		if d == partialStripeIdx%numDisks { // This is the parity disk for this stripe
-			// Update parity chunk
-			if partialStripeIdx < len(r.disks[d].Data) {
-				r.disks[d].Data[partialStripeIdx] = newParityChunk
-			} else {
-				r.disks[d].Data = append(r.disks[d].Data, newParityChunk)
-			}
-		} else { // This is a data disk
-			// Update data chunk
-			if partialStripeIdx < len(r.disks[d].Data) {
-				r.disks[d].Data[partialStripeIdx] = currentStripeChunks[d] // Write the modified chunk
-			} else {
-				r.disks[d].Data = append(r.disks[d].Data, currentStripeChunks[d])
-			}
-			dataChunkIdx++
-		}
+		r.disks[d].Data[targetStripeIndex] = currentStripeChunks[d] // Overwrite existing chunk
 	}
 
-	logrus.Infof("[RAID5] Partial write handled for stripe %d. New parity: %v", partialStripeIdx, newParityChunk)
+	logrus.Debugf("[RAID5] Partial write handled for stripe %d. New parity: %v", targetStripeIndex, newParityChunk)
 	return nil
 }
 
@@ -271,7 +250,7 @@ func (r *RAID5Controller) Read(start, length int) ([]byte, error) {
 		return nil, fmt.Errorf("stripe size (chunk unit size) must be greater than 0")
 	}
 
-	numDisks := len(r.disks) // Corrected: r.disks -> r.disks
+	numDisks := len(r.disks)
 	numDataDisks := numDisks - 1
 	bytesPerFullStripe := r.stripeSz * numDataDisks // Corrected: r.stripeSz -> r.stripeSz
 
@@ -282,7 +261,7 @@ func (r *RAID5Controller) Read(start, length int) ([]byte, error) {
 	// Determine the maximum logical stripe index that has ever been written across the array.
 	// This should not be limited by a single failed disk's zero length, as data can be reconstructed.
 	maxWrittenLogicalStripeIdx := -1
-	for _, disk := range r.disks { // Corrected: r.disks -> r.disks
+	for _, disk := range r.disks {
 		if len(disk.Data)-1 > maxWrittenLogicalStripeIdx {
 			maxWrittenLogicalStripeIdx = len(disk.Data) - 1
 		}
@@ -324,20 +303,14 @@ func (r *RAID5Controller) Read(start, length int) ([]byte, error) {
 
 		failedDisksInStripe := []int{} // Stores IDs of disks that are considered failed for this specific stripe
 
-		// Map to temporarily store the chunks (data or parity) for the current stripe.
-		// This map uses disk ID as key and the byte slice (chunk data) as value.
 		stripeChunks := make(map[int][]byte)
 
 		// First pass: identify failed disks and collect available chunks
 		for d := 0; d < numDisks; d++ {
-			// A disk is "failed" for this stripe if it doesn't have a chunk at currentStripeIdx
-			// (e.g., if it was cleared, or not enough data was written to it).
 			if currentStripeIdx >= len(r.disks[d].Data) || r.disks[d].Data[currentStripeIdx] == nil || len(r.disks[d].Data[currentStripeIdx]) == 0 { // Corrected: r.disks -> r.disks
 				failedDisksInStripe = append(failedDisksInStripe, d)
 				logrus.Debugf("Disk %d considered failed for stripe %d", d, currentStripeIdx)
 			} else {
-				// Copy the chunk to prevent memory aliasing, especially important if Read is part of a modify-write cycle.
-				// For this simulator, it's good practice for isolated chunk handling.
 				chunkCopy := make([]byte, r.stripeSz)
 				copy(chunkCopy, r.disks[d].Data[currentStripeIdx])
 				stripeChunks[d] = chunkCopy
@@ -384,8 +357,6 @@ func (r *RAID5Controller) Read(start, length int) ([]byte, error) {
 			currentStripeLogicalData = append(currentStripeLogicalData, dataChunk...)
 		}
 
-		// Determine the segment of `currentStripeLogicalData` to append to the result.
-		// This handles partial reads at the beginning and end of the overall requested range.
 		startCopyOffset := 0
 		endCopyOffset := len(currentStripeLogicalData) // Default to full stripe length
 
@@ -396,7 +367,6 @@ func (r *RAID5Controller) Read(start, length int) ([]byte, error) {
 			endCopyOffset = endOffsetInLastStripe + 1 // +1 because slice end index is exclusive
 		}
 
-		// Ensure the copy offsets are within valid bounds of the current stripe's logical data
 		if startCopyOffset < 0 {
 			startCopyOffset = 0
 		}
@@ -404,15 +374,12 @@ func (r *RAID5Controller) Read(start, length int) ([]byte, error) {
 			endCopyOffset = len(currentStripeLogicalData)
 		}
 
-		// Only append if there's actual data to copy from this stripe within the requested range
 		if startCopyOffset < endCopyOffset {
 			dataToAppend := currentStripeLogicalData[startCopyOffset:endCopyOffset]
 			result = append(result, dataToAppend...)
 		}
 	}
 
-	// Final check: if the collected result is longer than requested (due to partial stripe math),
-	// truncate it. This usually shouldn't happen if the logic is perfect.
 	if len(result) > length {
 		result = result[:length]
 	}

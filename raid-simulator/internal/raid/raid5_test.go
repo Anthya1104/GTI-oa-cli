@@ -9,17 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// func TestRAID5_WriteAndRead_Success(t *testing.T) {
-// 	r, _ := NewRAID5Controller(3, 1)
-// 	data := []byte("ABCDEFGH")
-// 	err := r.Write(data, 0)
-// 	assert.NoError(t, err)
-
-// 	read, err := r.Read(0, len(data))
-// 	assert.NoError(t, err)
-// 	assert.Equal(t, data, read)
-// }
-
 func init() {
 	logrus.SetLevel(logrus.DebugLevel)
 	logrus.SetFormatter(&logrus.TextFormatter{
@@ -253,5 +242,94 @@ func TestRAID5_Read_Success(t *testing.T) {
 		readData, err := controller.Read(1, 3)
 		assert.Nil(t, err)
 		assert.Equal(t, []byte("BCD"), readData)
+	})
+}
+
+func TestRAID5_ClearDisk_Success(t *testing.T) {
+	controller, err := NewRAID5Controller(3, 1)
+	assert.Nil(t, err)
+
+	data := []byte("ABCDEFGH")
+	err = controller.Write(data, 0)
+	assert.Nil(t, err)
+
+	t.Run("ClearDisk0", func(t *testing.T) {
+		err := controller.ClearDisk(0)
+		assert.Nil(t, err)
+		assert.Empty(t, controller.disks[0].Data)
+		assert.Equal(t, 4, len(controller.disks[1].Data))
+		assert.Equal(t, 4, len(controller.disks[2].Data))
+	})
+
+	t.Run("ClearNonExistentDisk", func(t *testing.T) {
+		err := controller.ClearDisk(5)
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "disk index 5 out of bounds")
+	})
+}
+
+func TestRAID5_Read_SingleDiskFailure_Reconstruction(t *testing.T) {
+	controller, err := NewRAID5Controller(3, 1)
+	assert.Nil(t, err)
+
+	data := []byte("ABCDEFGH")
+	err = controller.Write(data, 0)
+	assert.Nil(t, err)
+
+	t.Run("Disk0Failure", func(t *testing.T) {
+		ctrl, _ := NewRAID5Controller(3, 1)
+		ctrl.Write(data, 0)
+
+		err := ctrl.ClearDisk(0)
+		assert.Nil(t, err)
+
+		readData, err := ctrl.Read(0, 8)
+		assert.Nil(t, err)
+		assert.Equal(t, data, readData) // "ABCDEFGH"
+	})
+
+	t.Run("Disk1Failure", func(t *testing.T) {
+		ctrl, _ := NewRAID5Controller(3, 1)
+		ctrl.Write(data, 0)
+
+		err := ctrl.ClearDisk(1)
+		assert.Nil(t, err)
+
+		readData, err := ctrl.Read(0, 8)
+		assert.Nil(t, err)
+		assert.Equal(t, data, readData) // "ABCDEFGH"
+	})
+
+	t.Run("Disk2Failure", func(t *testing.T) {
+		ctrl, _ := NewRAID5Controller(3, 1)
+		ctrl.Write(data, 0)
+
+		err := ctrl.ClearDisk(2)
+		assert.Nil(t, err)
+
+		readData, err := ctrl.Read(0, 8)
+		assert.Nil(t, err)
+		assert.Equal(t, data, readData) //"ABCDEFGH"
+	})
+}
+
+func TestRAID5_Read_MultipleDiskFailures(t *testing.T) {
+	controller, err := NewRAID5Controller(3, 1)
+	assert.Nil(t, err)
+
+	data := []byte("ABCDEFGH")
+	err = controller.Write(data, 0)
+	assert.Nil(t, err)
+
+	err = controller.ClearDisk(0)
+	assert.Nil(t, err)
+	err = controller.ClearDisk(1)
+	assert.Nil(t, err)
+
+	t.Run("TwoDiskFailure", func(t *testing.T) {
+		readData, readErr := controller.Read(0, 8)
+		assert.NotNil(t, readErr)
+		assert.Contains(t, readErr.Error(), "multiple disk failures")
+		assert.Empty(t, readData)
 	})
 }

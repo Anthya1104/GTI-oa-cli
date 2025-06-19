@@ -64,7 +64,6 @@ func (r *RAID5Controller) Write(data []byte, offset int) error {
 				r.disks[d].Data = append(r.disks[d].Data, make([]byte, r.stripeSz))
 			}
 		}
-		// MODIFICATION END
 
 		// Distribute data chunks from `stripeData` to the appropriate data disks
 		for d := 0; d < numDisks; d++ {

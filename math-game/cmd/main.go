@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"math/rand"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/Anthya1104/math-game-cli/internal/cobra"
@@ -22,6 +25,19 @@ func main() {
 		logrus.Fatalf("Error executing command: %v", err)
 		os.Exit(1)
 	}
+
+	// graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigCh
+		logrus.Infof("Received signal: %s. Initiating graceful shutdown...", sig)
+		cancel()
+	}()
 
 	students := []*model.Student{
 		model.NewStudent("A", 1),
@@ -44,6 +60,9 @@ func main() {
 		Teacher:   teacher,
 		MaxRounds: 1,
 	}
-	game.Start()
+
+	game.Start(ctx)
+
+	logrus.Infof("Game application finished.")
 
 }

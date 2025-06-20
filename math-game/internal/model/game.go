@@ -1,7 +1,9 @@
 package model
 
 import (
+	"context"
 	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -22,88 +24,132 @@ type Game struct {
 	Results []RoundResult
 }
 
-func (g *Game) Start() {
+func (g *Game) Start(ctx context.Context) {
 	logrus.Infof("Teacher: Guys, are you ready?")
-	time.Sleep(g.Teacher.WaitTime)
+
+	// This sleep simulates the 3-second countdown
+	for i := 3; i > 0; i-- {
+		select {
+		case <-ctx.Done():
+			logrus.Warnf("Game interrupted during countdown.")
+			return
+		case <-time.After(1 * time.Second):
+			logrus.Debugf("# Count %d", i)
+		}
+	}
 
 	for i := 1; i <= g.MaxRounds; i++ {
+		select {
+		case <-ctx.Done():
+			logrus.Warnf("Game interrupted before round %d.", i)
+			return
+		default:
+		}
+
 		q, err := NewQuestion(i)
 		if err != nil {
 			logrus.Errorf("failed to generate question %d: %v", i, err)
 			continue
 		}
 		g.Questions = append(g.Questions, q)
-		g.PlayRound(q)
+		g.PlayRound(ctx, q)
 	}
 }
 
-func (g *Game) PlayRound(q *Question) {
+func (g *Game) PlayRound(ctx context.Context, q *Question) {
 	logrus.Infof("Teacher: %s", q)
 
+	roundCtx, cancelRound := context.WithCancel(ctx)
+	defer cancelRound() // cancel the context when the round ended
+
 	answerCh := make(chan AnswerEvent, len(g.Students))
+	var wg sync.WaitGroup // wait answers from all students
+
 	for _, s := range g.Students {
-		go AskStudent(s, q, answerCh)
+		wg.Add(1) //add count for each students
+		go func(student *Student) {
+			defer wg.Done()
+			AskStudent(roundCtx, student, q, answerCh)
+		}(s)
 	}
 
-	attemptedStudents := make(map[string]bool)
-	var winner *Student
+	correctAnswerFound := false
+	answersReceived := 0
+	totalStudents := len(g.Students)
 
-	// Loop to process answers until a winner is found or everyone has tried
-	for len(attemptedStudents) < len(g.Students) {
-		answer := <-answerCh
+	for answersReceived < totalStudents {
+		select {
+		case <-roundCtx.Done():
+			logrus.Infof("Round %d interrupted: %v", q.ID, roundCtx.Err())
+			goto EndRound
+		case answerEvent := <-answerCh:
+			answersReceived++
 
-		// Skip if this student has already attempted in this round
-		if _, ok := attemptedStudents[answer.Student.Name]; ok {
-			continue
-		}
+			logrus.Infof("%s: %d %s %d = %d!", answerEvent.Student.Name, q.ArgumentA, q.Operator, q.ArgumentB, answerEvent.Answer)
 
-		attemptedStudents[answer.Student.Name] = true
-		logrus.Infof("%s: %d %s %d = %d!", answer.Student.Name, q.ArgumentA, q.Operator, q.ArgumentB, answer.Answer)
-
-		// Check if the answer is correct
-		if answer.Answer == q.Answer {
-			logrus.Infof("Teacher: %s, you're right!", answer.Student.Name)
-			winner = answer.Student
-			g.Results = append(g.Results, RoundResult{Student: winner, Answer: answer.Answer})
-			break
-		} else {
-			logrus.Infof("Teacher: %s, you are wrong.", answer.Student.Name)
+			if answerEvent.Answer == q.Answer {
+				g.Results = append(g.Results, RoundResult{Student: answerEvent.Student, Answer: answerEvent.Answer})
+				logrus.Infof("Teacher: %s, you're right!", answerEvent.Student.Name)
+				correctAnswerFound = true
+				cancelRound()
+				goto EndRound
+			} else {
+				logrus.Infof("Teacher: %s, wrong answer! (%s)", answerEvent.Student.Name, q.String())
+				if answersReceived == totalStudents {
+					logrus.Infof("Teacher: Everyone was wrong this round for Q%d.", q.ID)
+					goto EndRound
+				}
+			}
+		case <-time.After(10 * time.Second): // time out for  round
+			logrus.Warnf("Round %d timed out! No one answered correctly within the time limit.", q.ID)
+			cancelRound()
+			goto EndRound
 		}
 	}
 
-	// After the loop, check if we found a winner
-	if winner != nil {
+EndRound:
+	wg.Wait()
+	logrus.Debugf("All student goroutines for round %d finished.", q.ID)
+	if correctAnswerFound {
 		for _, s := range g.Students {
-			if s.Name != winner.Name {
-				logrus.Infof("%s: %s, you win.", s.Name, winner.Name)
+			if s.Name != g.Results[len(g.Results)-1].Student.Name { // students who not be the winner
+				logrus.Infof("%s: %s, you win!", s.Name, g.Results[len(g.Results)-1].Student.Name)
 			}
 		}
-	} else {
-		logrus.Infof("Teacher: Boooo~ Answer is %d.", q.Answer)
 	}
+	logrus.Infof("--- Round %d Ends ---", q.ID)
 }
 
 // TODO: could do interface extracting if multiple student types are required
-var AskStudent = func(s *Student, q *Question, ch chan AnswerEvent) {
-	time.Sleep(s.WaitTime)
-
-	studentAnswer := q.Answer
-	//50% chance of getting the wrong answer
-	if rand.Intn(2) == 0 { // 0 represents a wrong answer
-		// Generate a random wrong answer that is not the correct one
-		for {
-			wrongAnswer := q.Answer + (rand.Intn(10) - 5) // a random number near the answer
-			if wrongAnswer != q.Answer {
-				studentAnswer = wrongAnswer
-				break
-			}
-		}
+var AskStudent = func(ctx context.Context, s *Student, q *Question, ch chan AnswerEvent) {
+	// students' thinking time
+	select {
+	case <-ctx.Done():
+		logrus.Debugf("%s's goroutine for Q%d cancelled.", s.Name, q.ID)
+		return
+	case <-time.After(s.WaitTime):
 	}
 
-	ch <- AnswerEvent{
+	// random answer with 70% correct rate
+	answer := q.Answer
+	if rand.Float32() < 0.3 {
+		wrongAnswer := q.Answer + rand.Intn(10) - 5
+		if wrongAnswer == q.Answer {
+			wrongAnswer++
+		}
+		answer = wrongAnswer
+	}
+
+	select {
+	case <-ctx.Done():
+		logrus.Debugf("%s's goroutine for Q%d cancelled before sending answer.", s.Name, q.ID)
+		return
+	case ch <- AnswerEvent{
 		Student: s,
-		Answer:  studentAnswer,
+		Answer:  answer,
 		QID:     q.ID,
 		Time:    time.Now(),
+	}:
+		logrus.Debugf("%s sent answer %d for Q%d.", s.Name, answer, q.ID)
 	}
 }

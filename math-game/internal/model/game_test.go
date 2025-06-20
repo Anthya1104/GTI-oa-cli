@@ -1,4 +1,4 @@
-package model_test
+package model
 
 import (
 	"context"
@@ -6,183 +6,181 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Anthya1104/math-game-cli/internal/model"
 	"github.com/stretchr/testify/assert"
 )
 
 type MockStudentActioner struct {
-	AskStudentFunc func(ctx context.Context, s *model.Student, q *model.Question, ch chan model.AnswerEvent)
+	AskStudentFunc func(ctx context.Context, s *Student, q *Question, ch chan AnswerEvent) // Removed model. prefix
 }
 
-func (m *MockStudentActioner) AskStudent(ctx context.Context, s *model.Student, q *model.Question, ch chan model.AnswerEvent) {
+func (m *MockStudentActioner) AskStudent(ctx context.Context, s *Student, q *Question, ch chan AnswerEvent) { // Removed model. prefix
 	if m.AskStudentFunc != nil {
 		m.AskStudentFunc(ctx, s, q, ch)
 	} else {
-		// Default mock behavior if AskStudentFunc is not set
+		// Default mock behavior if AskStudentFunc is not set: always correct answer after wait.
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(s.WaitTime):
-			// Default: always correct answer
-			ch <- model.AnswerEvent{Student: s, Answer: q.Answer, QID: q.ID}
+			ch <- AnswerEvent{Student: s, Answer: q.Answer, QID: q.ID}
 		}
 	}
 }
 
-func TestGamePlay_SimpleFlow(t *testing.T) {
-	ctx := context.Background()
+func TestGamePlay_MultipleRoundFlow(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	students := []*model.Student{
-		model.NewStudent("A", 1),
-		model.NewStudent("B", 2),
-		model.NewStudent("C", 3),
-		model.NewStudent("D", 4),
-		model.NewStudent("E", 5),
-	}
+	students := []*Student{NewStudent("A", 1), NewStudent("B", 2)}
+	teacher := NewTeacher("Teacher")
+	teacher.WaitTime = 1 * time.Millisecond
 
-	teacher := model.NewTeacher("Teacher")
-
-	// init thinking time for students and teacher
-	teacher.WaitTime = time.Second * 3
-	for _, s := range students {
-		s.WaitTime = time.Duration(rand.Intn(3)+1) * time.Second
-	}
-
-	game := model.Game{
+	game := Game{
 		Students:        students,
 		Teacher:         teacher,
-		MaxRounds:       1,
-		StudentActioner: &model.DefaultStudentActioner{},
-	}
-	game.Start(ctx)
-
-	if len(game.Questions) != 1 {
-		t.Errorf("expected 1 question, got %d", len(game.Questions))
-	}
-}
-
-// This is more of an integration test. It's good for checking the overall flow.
-func TestGamePlay_MultipleRoundFlow(t *testing.T) {
-	ctx := context.Background()
-
-	students := []*model.Student{
-		model.NewStudent("A", 1),
-		model.NewStudent("B", 2),
-	}
-	game := model.Game{
-		Students:        students,
-		Teacher:         model.NewTeacher("Teacher"),
 		MaxRounds:       3,
-		StudentActioner: &model.DefaultStudentActioner{},
+		StudentActioner: &DefaultStudentActioner{},
 	}
 	game.Start(ctx)
 
-	// We can assert the number of rounds played
-	assert.Equal(t, 3, len(game.Questions), "Should have generated 3 questions for 3 rounds")
+	// Wait for all 3 results to be collected.
+	assert.Eventually(t, func() bool {
+		game.resultsMu.Lock()
+		defer game.resultsMu.Unlock()
+		return len(game.Results) == 3
+	}, 6*time.Second, 10*time.Millisecond, "Expected 3 results to be collected")
 }
 
-// This unit test focuses on the PlayRound logic with a simple correct answer.
-func TestPlayRoundFirstAnswerCorrect(t *testing.T) {
-	ctx := context.Background()
+func TestPlayQuestion_FirstAnswerCorrect(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	s1 := model.NewStudent("QuickStudent", 1)
-	s2 := model.NewStudent("SlowStudent", 2)
-	s1.WaitTime = 1 * time.Millisecond // s1 is faster
-	s2.WaitTime = 1 * time.Second
+	s1 := NewStudent("QuickStudent", 1)
+	s2 := NewStudent("SlowStudent", 2)
+	s1.WaitTime = 1 * time.Millisecond
+	s2.WaitTime = 100 * time.Millisecond
 
-	game := &model.Game{
-		Students: []*model.Student{s1, s2},
-		Teacher:  model.NewTeacher("T"),
+	game := &Game{
+		Students:        []*Student{s1, s2},
+		Teacher:         NewTeacher("T"),
+		MaxRounds:       1,
+		StudentActioner: &MockStudentActioner{},
 	}
-	q := &model.Question{ID: 1, Answer: 123}
 
-	mockActioner := &MockStudentActioner{}
-	mockActioner.AskStudentFunc = func(mockCtx context.Context, s *model.Student, q *model.Question, ch chan model.AnswerEvent) {
+	mockActioner := game.StudentActioner.(*MockStudentActioner)
+	mockActioner.AskStudentFunc = func(mockCtx context.Context, s *Student, q *Question, ch chan AnswerEvent) {
 		select {
 		case <-mockCtx.Done():
 			return
 		case <-time.After(s.WaitTime):
 		}
-		ch <- model.AnswerEvent{Student: s, Answer: q.Answer, QID: q.ID}
+		ch <- AnswerEvent{Student: s, Answer: q.Answer, QID: q.ID}
 	}
-	game.StudentActioner = mockActioner
-	game.PlayRound(ctx, q)
 
-	// Assert that the winner is the first (and faster) student
-	assert.Len(t, game.Results, 1, "There should be exactly one winner")
-	assert.Equal(t, "QuickStudent", game.Results[0].Student.Name)
-	assert.Equal(t, 123, game.Results[0].Answer)
+	game.Start(ctx)
+
+	// Wait for exactly 1 result to be collected (the winner of Q1)
+	assert.Eventually(t, func() bool {
+		game.resultsMu.Lock() // Now accessing unexported resultsMu
+		defer game.resultsMu.Unlock()
+		return len(game.Results) == 1
+	}, 2*time.Second, 10*time.Millisecond, "Expected exactly one result to be collected for the winning round")
+
+	game.resultsMu.Lock()
+	collectedResult := game.Results[0]
+	game.resultsMu.Unlock()
+
+	assert.Equal(t, "QuickStudent", collectedResult.Student.Name, "Winner should be QuickStudent")
+	assert.True(t, collectedResult.IsCorrect, "Result should indicate a correct answer")
 }
 
-func TestPlayRound_FirstWrongThenCorrect(t *testing.T) {
-	ctx := context.Background()
+func TestPlayQuestion_FirstWrongThenCorrect(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	s1 := model.NewStudent("QuickButWrong", 1)
-	s2 := model.NewStudent("SlowButCorrect", 2)
-	s1.WaitTime = 1 * time.Millisecond // s1 answers first
-	s2.WaitTime = 5 * time.Millisecond // s2 answers second
+	s1 := NewStudent("QuickButWrong", 1)
+	s2 := NewStudent("SlowButCorrect", 2)
+	s1.WaitTime = 1 * time.Millisecond
+	s2.WaitTime = 5 * time.Millisecond
 
-	game := &model.Game{
-		Students: []*model.Student{s1, s2},
-		Teacher:  model.NewTeacher("T"),
+	game := &Game{
+		Students:        []*Student{s1, s2},
+		Teacher:         NewTeacher("T"),
+		MaxRounds:       1,
+		StudentActioner: &MockStudentActioner{},
 	}
-	q := &model.Question{ID: 1, Answer: 100}
 
-	mockActioner := &MockStudentActioner{}
-	mockActioner.AskStudentFunc = func(mockCtx context.Context, s *model.Student, q *model.Question, ch chan model.AnswerEvent) {
+	mockActioner := game.StudentActioner.(*MockStudentActioner)
+	mockActioner.AskStudentFunc = func(mockCtx context.Context, s *Student, q *Question, ch chan AnswerEvent) {
 		select {
 		case <-mockCtx.Done():
 			return
 		case <-time.After(s.WaitTime):
 		}
-		answer := -1 // Default wrong answer
+		answer := -1
 		if s.Name == "SlowButCorrect" {
 			answer = q.Answer // The correct student gives the right answer
 		}
-		ch <- model.AnswerEvent{Student: s, Answer: answer, QID: q.ID}
+		ch <- AnswerEvent{Student: s, Answer: answer, QID: q.ID}
 	}
 
-	game.StudentActioner = mockActioner
-	game.PlayRound(ctx, q)
+	game.Start(ctx) // Start the game
 
-	// Assert that the winner is the second student who answered correctly
-	assert.Len(t, game.Results, 1, "There should be exactly one winner")
-	assert.Equal(t, "SlowButCorrect", game.Results[0].Student.Name)
-	assert.Equal(t, 100, game.Results[0].Answer)
+	// Wait for the single result to be collected (the winner of Q1)
+	assert.Eventually(t, func() bool {
+		game.resultsMu.Lock() // Now accessing unexported resultsMu
+		defer game.resultsMu.Unlock()
+		return len(game.Results) == 1
+	}, 2*time.Second, 10*time.Millisecond, "Expected exactly one result to be collected for the winning round")
+
+	game.resultsMu.Lock()
+	collectedResult := game.Results[0]
+	game.resultsMu.Unlock()
+
+	assert.Equal(t, "SlowButCorrect", collectedResult.Student.Name, "Winner should be SlowButCorrect")
+	assert.True(t, collectedResult.IsCorrect, "Result should indicate a correct answer")
 }
 
-func TestPlayRound_AllWrong(t *testing.T) {
-	ctx := context.Background()
+func TestPlayQuestion_AllWrong(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	students := []*model.Student{
-		model.NewStudent("A", 1),
-		model.NewStudent("B", 2),
-		model.NewStudent("C", 3),
+	students := []*Student{
+		NewStudent("A", 1), NewStudent("B", 2), NewStudent("C", 3),
 	}
-	// Give them random wait times
 	for _, s := range students {
 		s.WaitTime = time.Duration(rand.Intn(5)+1) * time.Millisecond
 	}
 
-	game := &model.Game{
-		Students: students,
-		Teacher:  model.NewTeacher("T"),
+	game := &Game{
+		Students:        students,
+		Teacher:         NewTeacher("T"),
+		MaxRounds:       1,
+		StudentActioner: &MockStudentActioner{},
 	}
-	q := &model.Question{ID: 1, Answer: 100}
 
-	mockActioner := &MockStudentActioner{}
-	mockActioner.AskStudentFunc = func(mockCtx context.Context, s *model.Student, q *model.Question, ch chan model.AnswerEvent) {
+	mockActioner := game.StudentActioner.(*MockStudentActioner)
+	mockActioner.AskStudentFunc = func(mockCtx context.Context, s *Student, q *Question, ch chan AnswerEvent) {
 		select {
 		case <-mockCtx.Done():
 			return
 		case <-time.After(s.WaitTime):
 		}
-		ch <- model.AnswerEvent{Student: s, Answer: q.Answer + 1, QID: q.ID}
+		ch <- AnswerEvent{Student: s, Answer: q.Answer + 1, QID: q.ID}
 	}
-	game.StudentActioner = mockActioner
 
-	game.PlayRound(ctx, q)
+	game.Start(ctx)
 
-	// Assert that there are no winners recorded in the results
-	assert.Len(t, game.Results, 0, "There should be no winners if everyone is wrong")
+	assert.Eventually(t, func() bool {
+		game.resultsMu.Lock()
+		defer game.resultsMu.Unlock()
+		return len(game.Results) == 1
+	}, 2*time.Second, 10*time.Millisecond, "Expected one result to be collected (indicating round outcome)")
+
+	game.resultsMu.Lock()
+	collectedResult := game.Results[0]
+	game.resultsMu.Unlock()
+
+	assert.False(t, collectedResult.IsCorrect, "Result should indicate an incorrect answer (no winner)")
+	assert.Nil(t, collectedResult.Student, "No student should be recorded as winner if all are wrong")
 }

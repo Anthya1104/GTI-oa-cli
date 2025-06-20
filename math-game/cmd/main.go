@@ -58,11 +58,19 @@ func main() {
 	game := model.Game{
 		Students:        students,
 		Teacher:         teacher,
-		MaxRounds:       1,
+		MaxRounds:       3,
 		StudentActioner: &model.DefaultStudentActioner{},
 	}
 
-	game.Start(ctx)
+	gameDone := game.Start(ctx)
+
+	select {
+	case <-ctx.Done():
+		logrus.Infof("The game play has been interrupted, exiting the game.")
+	case <-gameDone:
+		logrus.Infof("All game rounds finished, exiting the game.")
+	}
+	time.Sleep(1 * time.Second)
 
 	logrus.Infof("Game application finished.")
 

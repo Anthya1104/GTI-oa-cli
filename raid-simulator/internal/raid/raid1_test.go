@@ -8,9 +8,9 @@ import (
 )
 
 func TestRAID1_WriteRead(t *testing.T) {
-	r := raid.NewRAID1Controller(3)
+	r, _ := raid.NewRAID1Controller(3, 1)
 	data := []byte("HELLO_RAID1")
-	err := r.Write(data)
+	err := r.Write(data, 0)
 	assert.NoError(t, err)
 
 	read, err := r.Read(0, len(data))
@@ -19,9 +19,9 @@ func TestRAID1_WriteRead(t *testing.T) {
 }
 
 func TestRAID1_ReadAfterSingleDiskClear(t *testing.T) {
-	r := raid.NewRAID1Controller(3)
+	r, _ := raid.NewRAID1Controller(3, 1)
 	data := []byte("HELLO_RAID1")
-	err := r.Write(data)
+	err := r.Write(data, 0)
 	assert.NoError(t, err)
 
 	err = r.ClearDisk(1)
@@ -33,9 +33,9 @@ func TestRAID1_ReadAfterSingleDiskClear(t *testing.T) {
 }
 
 func TestRAID1_ReadAfterAllDiskClear(t *testing.T) {
-	r := raid.NewRAID1Controller(3)
+	r, _ := raid.NewRAID1Controller(3, 1)
 	data := []byte("HELLO_RAID1")
-	err := r.Write(data)
+	err := r.Write(data, 0)
 	assert.NoError(t, err)
 
 	err = r.ClearDisk(0)
@@ -50,9 +50,9 @@ func TestRAID1_ReadAfterAllDiskClear(t *testing.T) {
 }
 
 func TestRAID1_PartialRead(t *testing.T) {
-	r := raid.NewRAID1Controller(3)
+	r, _ := raid.NewRAID1Controller(3, 1)
 	data := []byte("HELLO_RAID1")
-	err := r.Write(data)
+	err := r.Write(data, 0)
 	assert.NoError(t, err)
 
 	read, err := r.Read(6, 5) // Expecting "RAID1"

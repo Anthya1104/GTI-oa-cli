@@ -56,9 +56,10 @@ func main() {
 	}
 
 	game := model.Game{
-		Students:  students,
-		Teacher:   teacher,
-		MaxRounds: 1,
+		Students:        students,
+		Teacher:         teacher,
+		MaxRounds:       1,
+		StudentActioner: &model.DefaultStudentActioner{},
 	}
 
 	game.Start(ctx)

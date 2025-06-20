@@ -9,6 +9,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+type DefaultStudentActioner struct{}
+
 type RoundResult struct {
 	Student *Student
 	Answer  int
@@ -22,6 +24,9 @@ type Game struct {
 
 	// recourd the winner and answer
 	Results []RoundResult
+
+	// injected student action interface
+	StudentActioner StudentActioner
 }
 
 func (g *Game) Start(ctx context.Context) {
@@ -73,7 +78,7 @@ func (g *Game) PlayRound(ctx context.Context, q *Question) {
 		wg.Add(1) //add count for each students
 		go func(student *Student) {
 			defer wg.Done()
-			AskStudent(roundCtx, student, q, answerCh)
+			g.StudentActioner.AskStudent(roundCtx, student, q, answerCh)
 		}(s)
 	}
 
@@ -124,8 +129,7 @@ EndRound:
 	logrus.Infof("--- Round %d Ends ---", q.ID)
 }
 
-// TODO: could do interface extracting if multiple student types are required
-var AskStudent = func(ctx context.Context, s *Student, q *Question, ch chan AnswerEvent) {
+func (d *DefaultStudentActioner) AskStudent(ctx context.Context, s *Student, q *Question, ch chan AnswerEvent) {
 	// students' thinking time
 	select {
 	case <-ctx.Done():

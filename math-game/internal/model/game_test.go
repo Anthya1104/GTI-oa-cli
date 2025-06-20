@@ -10,6 +10,25 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+type MockStudentActioner struct {
+	AskStudentFunc func(ctx context.Context, s *model.Student, q *model.Question, ch chan model.AnswerEvent)
+}
+
+func (m *MockStudentActioner) AskStudent(ctx context.Context, s *model.Student, q *model.Question, ch chan model.AnswerEvent) {
+	if m.AskStudentFunc != nil {
+		m.AskStudentFunc(ctx, s, q, ch)
+	} else {
+		// Default mock behavior if AskStudentFunc is not set
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(s.WaitTime):
+			// Default: always correct answer
+			ch <- model.AnswerEvent{Student: s, Answer: q.Answer, QID: q.ID}
+		}
+	}
+}
+
 func TestGamePlay_SimpleFlow(t *testing.T) {
 	ctx := context.Background()
 
@@ -30,9 +49,10 @@ func TestGamePlay_SimpleFlow(t *testing.T) {
 	}
 
 	game := model.Game{
-		Students:  students,
-		Teacher:   teacher,
-		MaxRounds: 1,
+		Students:        students,
+		Teacher:         teacher,
+		MaxRounds:       1,
+		StudentActioner: &model.DefaultStudentActioner{},
 	}
 	game.Start(ctx)
 
@@ -50,9 +70,10 @@ func TestGamePlay_MultipleRoundFlow(t *testing.T) {
 		model.NewStudent("B", 2),
 	}
 	game := model.Game{
-		Students:  students,
-		Teacher:   model.NewTeacher("Teacher"),
-		MaxRounds: 3,
+		Students:        students,
+		Teacher:         model.NewTeacher("Teacher"),
+		MaxRounds:       3,
+		StudentActioner: &model.DefaultStudentActioner{},
 	}
 	game.Start(ctx)
 
@@ -75,9 +96,8 @@ func TestPlayRoundFirstAnswerCorrect(t *testing.T) {
 	}
 	q := &model.Question{ID: 1, Answer: 123}
 
-	oldAskStudent := model.AskStudent
-	defer func() { model.AskStudent = oldAskStudent }()
-	model.AskStudent = func(mockCtx context.Context, s *model.Student, q *model.Question, ch chan model.AnswerEvent) {
+	mockActioner := &MockStudentActioner{}
+	mockActioner.AskStudentFunc = func(mockCtx context.Context, s *model.Student, q *model.Question, ch chan model.AnswerEvent) {
 		select {
 		case <-mockCtx.Done():
 			return
@@ -85,7 +105,7 @@ func TestPlayRoundFirstAnswerCorrect(t *testing.T) {
 		}
 		ch <- model.AnswerEvent{Student: s, Answer: q.Answer, QID: q.ID}
 	}
-
+	game.StudentActioner = mockActioner
 	game.PlayRound(ctx, q)
 
 	// Assert that the winner is the first (and faster) student
@@ -108,9 +128,8 @@ func TestPlayRound_FirstWrongThenCorrect(t *testing.T) {
 	}
 	q := &model.Question{ID: 1, Answer: 100}
 
-	oldAskStudent := model.AskStudent
-	defer func() { model.AskStudent = oldAskStudent }()
-	model.AskStudent = func(mockCtx context.Context, s *model.Student, q *model.Question, ch chan model.AnswerEvent) {
+	mockActioner := &MockStudentActioner{}
+	mockActioner.AskStudentFunc = func(mockCtx context.Context, s *model.Student, q *model.Question, ch chan model.AnswerEvent) {
 		select {
 		case <-mockCtx.Done():
 			return
@@ -122,6 +141,8 @@ func TestPlayRound_FirstWrongThenCorrect(t *testing.T) {
 		}
 		ch <- model.AnswerEvent{Student: s, Answer: answer, QID: q.ID}
 	}
+
+	game.StudentActioner = mockActioner
 	game.PlayRound(ctx, q)
 
 	// Assert that the winner is the second student who answered correctly
@@ -149,17 +170,16 @@ func TestPlayRound_AllWrong(t *testing.T) {
 	}
 	q := &model.Question{ID: 1, Answer: 100}
 
-	oldAskStudent := model.AskStudent
-	defer func() { model.AskStudent = oldAskStudent }()
-	model.AskStudent = func(mockCtx context.Context, s *model.Student, q *model.Question, ch chan model.AnswerEvent) {
+	mockActioner := &MockStudentActioner{}
+	mockActioner.AskStudentFunc = func(mockCtx context.Context, s *model.Student, q *model.Question, ch chan model.AnswerEvent) {
 		select {
 		case <-mockCtx.Done():
 			return
 		case <-time.After(s.WaitTime):
 		}
-		// Send a wrong answer that is guaranteed not to be the correct one
 		ch <- model.AnswerEvent{Student: s, Answer: q.Answer + 1, QID: q.ID}
 	}
+	game.StudentActioner = mockActioner
 
 	game.PlayRound(ctx, q)
 

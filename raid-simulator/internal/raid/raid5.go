@@ -3,17 +3,26 @@ package raid
 import (
 	"fmt"
 
+	"github.com/Anthya1104/raid-simulator/internal/rsutil"
+	"github.com/klauspost/reedsolomon"
 	"github.com/sirupsen/logrus"
 )
 
+// RAID5Controller implements the RAIDController interface for RAID 5.
 type RAID5Controller struct {
 	disks    []*Disk
 	stripeSz int
+
+	encoder          reedsolomon.Encoder    // Reed-Solomon encoder for Encode/Reconstruct
+	encoderExtension reedsolomon.Extensions // Reed-Solomon extension for DataShards/ParityShards
 }
 
+// NewRAID5Controller creates and initializes a new RAID5Controller.
+// It requires at least 3 disks (2 data + 1 parity) for RAID5 to be fault-tolerant.
+// stripeSz must be greater than 0.
 func NewRAID5Controller(diskCount, stripeSz int) (*RAID5Controller, error) {
 	if diskCount < 3 {
-		return nil, fmt.Errorf("RAID5 requires at least 3 disks (1 data + 1 parity). Provided: %d", diskCount)
+		return nil, fmt.Errorf("RAID5 requires at least 3 disks (2 data + 1 parity). Provided: %d", diskCount)
 	}
 	if stripeSz <= 0 {
 		return nil, fmt.Errorf("stripe size (chunk unit size) must be greater than 0. Provided: %d", stripeSz)
@@ -23,25 +32,46 @@ func NewRAID5Controller(diskCount, stripeSz int) (*RAID5Controller, error) {
 	for i := range disks {
 		disks[i] = &Disk{ID: i} // Assign an ID to each disk
 	}
+
+	numDataShards := diskCount - 1 // RAID5 with 1 parity shard
+	numParityShards := 1           // RAID5 with 1 parity disk
+
+	// init reedsolomon encoder
+	enc, err := reedsolomon.New(numDataShards, numParityShards)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create reedsolomon encoder for RAID5: %w", err)
+	}
+
+	// init reedsolomon extension
+	encEx, ok := enc.(reedsolomon.Extensions)
+	if !ok {
+		return nil, fmt.Errorf("reedsolomon encoder does not implement Extensions interface")
+	}
+
 	return &RAID5Controller{
-		disks:    disks,
-		stripeSz: stripeSz,
+		disks:            disks,
+		stripeSz:         stripeSz,
+		encoder:          enc,
+		encoderExtension: encEx,
 	}, nil
 }
 
+// Write writes data to the RAID5 array.
+// The `offset` parameter specifies the logical byte offset at which to start writing.
 func (r *RAID5Controller) Write(data []byte, offset int) error {
-	// Basic validation for RAID5 configuration
-	if len(r.disks) < 2 {
-		return fmt.Errorf("RAID5 requires at least 2 disks, got %d", len(r.disks))
+	if len(r.disks) < 3 {
+		return fmt.Errorf("RAID5 requires at least 3 disks, got %d", len(r.disks))
 	}
 	if r.stripeSz <= 0 {
 		return fmt.Errorf("stripe size (chunk unit size) must be greater than 0")
 	}
 
 	numDisks := len(r.disks)
-	numDataDisks := numDisks - 1
 
-	bytesPerFullStripe := r.stripeSz * numDataDisks
+	numDataShards := r.encoderExtension.DataShards()
+	numParityShards := r.encoderExtension.ParityShards()
+
+	bytesPerFullStripe := r.stripeSz * numDataShards
 
 	fullStripesCount := len(data) / bytesPerFullStripe
 	remainingBytes := len(data) % bytesPerFullStripe
@@ -54,67 +84,30 @@ func (r *RAID5Controller) Write(data []byte, offset int) error {
 
 		stripeData := data[currentDataOffsetInInput : currentDataOffsetInInput+bytesPerFullStripe]
 
+		encodedShards, err := rsutil.EncodeStripeShards(stripeData, r.stripeSz, r.encoder, numDataShards, numParityShards)
+		if err != nil {
+			return fmt.Errorf("RAID5: failed to encode shards for stripe %d: %w", currentAbsoluteStripeIdx, err)
+		}
+
+		// RAID5 parity rotation
 		parityDiskIdx := currentAbsoluteStripeIdx % numDisks
 
-		chunksForThisStripe := make([][]byte, numDisks)
-		dataChunkIndexInStripe := 0 // Counter for which data chunk (0 to numDataDisks-1) we are processing within this stripe
-
+		logicalDataShardCounter := 0
 		for d := 0; d < numDisks; d++ {
 			for currentAbsoluteStripeIdx >= len(r.disks[d].Data) {
 				r.disks[d].Data = append(r.disks[d].Data, make([]byte, r.stripeSz))
 			}
-		}
 
-		// Distribute data chunks from `stripeData` to the appropriate data disks
-		for d := 0; d < numDisks; d++ {
 			if d == parityDiskIdx {
-				continue // Skip the disk designated for parity in this stripe
-			}
-
-			// Calculate the start and end byte indices for the current data chunk within `stripeData`.
-			chunkStart := dataChunkIndexInStripe * r.stripeSz
-			chunkEnd := chunkStart + r.stripeSz
-
-			// For full stripes, `chunkEnd` should always be within `stripeData`'s length.
-			if chunkEnd > len(stripeData) {
-				chunkEnd = len(stripeData)
-			}
-			// If we've already extracted all available data from `stripeData`, exit the loop.
-			if chunkStart >= len(stripeData) {
-				break
-			}
-
-			// Create a new byte slice for the chunk and copy the data.
-			// This is crucial to prevent memory aliasing issues where multiple disk `Data` slices
-			// might point to the same underlying array segment.
-			chunk := make([]byte, r.stripeSz)
-			copy(chunk, stripeData[chunkStart:chunkEnd])
-
-			chunksForThisStripe[d] = chunk
-			r.disks[d].Data[currentAbsoluteStripeIdx] = chunk
-			dataChunkIndexInStripe++
-		}
-
-		// Calculate the parity for the current stripe.
-		parityChunk := make([]byte, r.stripeSz)
-		for byteIdx := 0; byteIdx < r.stripeSz; byteIdx++ {
-			for d := 0; d < numDisks; d++ {
-				if d == parityDiskIdx {
-					continue // Do not include the parity disk's slot in the XOR calculation
-				}
-				// Perform XOR operation only if the chunk exists and has enough bytes for `byteIdx`
-				if chunksForThisStripe[d] != nil && len(chunksForThisStripe[d]) > byteIdx {
-					parityChunk[byteIdx] ^= chunksForThisStripe[d][byteIdx]
-				}
+				r.disks[d].Data[currentAbsoluteStripeIdx] = encodedShards[numDataShards]
+			} else {
+				r.disks[d].Data[currentAbsoluteStripeIdx] = encodedShards[logicalDataShardCounter]
+				logicalDataShardCounter++
 			}
 		}
 
-		// Write the calculated parity chunk to the disk designated for parity in this stripe.
-		r.disks[parityDiskIdx].Data[currentAbsoluteStripeIdx] = parityChunk
-
-		// Log informational details about the current stripe operation.
-		logrus.Debugf("[RAID5] stripe %d (absolute) - data bytes %d-%d (input data) - parityDisk: %d, chunks: %v, parity: %v",
-			currentAbsoluteStripeIdx, currentDataOffsetInInput, currentDataOffsetInInput+bytesPerFullStripe-1, parityDiskIdx, chunksForThisStripe, parityChunk)
+		logrus.Debugf("[RAID5] stripe %d (absolute) - data bytes %d-%d (input data) - parityDisk: %d, parity: %v",
+			currentAbsoluteStripeIdx, currentDataOffsetInInput, currentDataOffsetInInput+bytesPerFullStripe-1, parityDiskIdx, encodedShards[numDataShards])
 
 		currentDataOffsetInInput += bytesPerFullStripe // Advance the offset to the beginning of the next full stripe within the input data
 	}
@@ -131,12 +124,14 @@ func (r *RAID5Controller) Write(data []byte, offset int) error {
 	return nil
 }
 
+// handlePartialWrite performs a Read-Modify-Write operation for partial data that does not form a full RAID5 stripe.
 func (r *RAID5Controller) handlePartialWrite(data []byte, partialDataOffsetInInput int, remainingBytes int, targetStripeIndex int, originalWriteOffset int) error {
 	logrus.Debugf("[RAID5] Handling partial write of %d bytes using Read-Modify-Write for absolute stripe index %d.", remainingBytes, targetStripeIndex)
 
 	numDisks := len(r.disks)
-	numDataDisks := numDisks - 1
-	bytesPerFullStripe := r.stripeSz * numDataDisks
+	numDataShards := r.encoderExtension.DataShards()
+	numParityShards := r.encoderExtension.ParityShards()
+	bytesPerFullStripe := r.stripeSz * numDataShards
 
 	for d := 0; d < numDisks; d++ {
 		for targetStripeIndex >= len(r.disks[d].Data) {
@@ -144,121 +139,90 @@ func (r *RAID5Controller) handlePartialWrite(data []byte, partialDataOffsetInInp
 		}
 	}
 
-	// 1. Read the affected stripe (targetStripeIndex)
-	currentStripeChunks := make([][]byte, numDisks)
-	var failedDiskInStripe int = -1 // Track a single failed disk for reconstruction
+	physicalShards := make([][]byte, numDisks)
 
 	for d := 0; d < numDisks; d++ {
 		if targetStripeIndex < len(r.disks[d].Data) && r.disks[d].Data[targetStripeIndex] != nil && len(r.disks[d].Data[targetStripeIndex]) > 0 {
-			// Copy existing chunk data.
 			chunkCopy := make([]byte, r.stripeSz)
 			copy(chunkCopy, r.disks[d].Data[targetStripeIndex])
-			currentStripeChunks[d] = chunkCopy
+			physicalShards[d] = chunkCopy
 		} else {
-			// If a disk is truly failed (e.g., cleared), its Data[targetStripeIndex] might be nil or empty.
-			// Treat as a missing chunk for reconstruction.
-			currentStripeChunks[d] = make([]byte, r.stripeSz)
-			if failedDiskInStripe == -1 {
-				failedDiskInStripe = d
-			} else {
-				return fmt.Errorf("RAID5: Multiple disk failures (%v) detected in stripe %d during partial write RMW. Data unrecoverable", []int{failedDiskInStripe, d}, targetStripeIndex)
-			}
+			physicalShards[d] = nil // tag as lost (reed solomon defined as nil)
+			logrus.Debugf("Disk %d considered failed for stripe %d during RMW read.", d, targetStripeIndex)
 		}
 	}
 
-	// If a disk was "failed" (empty) in this stripe, reconstruct its content before modification.
-	if failedDiskInStripe != -1 {
-		reconstructedChunk := make([]byte, r.stripeSz)
-		for d, chunk := range currentStripeChunks {
-			if d == failedDiskInStripe {
-				continue // Skip the one we are reconstructing
-			}
-			for byteIdx := 0; byteIdx < r.stripeSz; byteIdx++ {
-				reconstructedChunk[byteIdx] ^= chunk[byteIdx]
-			}
-		}
-		currentStripeChunks[failedDiskInStripe] = reconstructedChunk
-		logrus.Warnf("RAID5: Reconstructed existing data for disk %d in stripe %d for RMW.", failedDiskInStripe, targetStripeIndex)
-	}
-
-	// 2. Form a complete logical stripe buffer from currentStripeChunks and overlay newPartialData
-	// Create a full logical stripe from the read chunks (including reconstructed ones)
-	fullLogicalStripeBuffer := make([]byte, bytesPerFullStripe)
-	dataChunkCursor := 0
+	// RAID5 parity rotation
 	parityDiskIdxForThisStripe := targetStripeIndex % numDisks
 
+	rsShards := make([][]byte, numDataShards+numParityShards)
+	logicalDataShardCounter := 0
 	for d := 0; d < numDisks; d++ {
 		if d == parityDiskIdxForThisStripe {
-			continue // Skip parity disk
+			rsShards[numDataShards] = physicalShards[d]
+		} else {
+			rsShards[logicalDataShardCounter] = physicalShards[d]
+			logicalDataShardCounter++
 		}
-		// Copy the data chunk from currentStripeChunks into the logical buffer
-		copy(fullLogicalStripeBuffer[dataChunkCursor*r.stripeSz:(dataChunkCursor+1)*r.stripeSz], currentStripeChunks[d])
-		dataChunkCursor++
 	}
 
-	// Calculate the starting byte offset of the new partial data *within this specific target logical stripe*.
-	// This ensures it's placed correctly regardless of where the overall `Write` started.
+	err := rsutil.ReconstructStripeShards(rsShards, r.encoder, numParityShards)
+	if err != nil {
+		return fmt.Errorf("RAID5: failed to reconstruct shards in stripe %d for RMW: %w", targetStripeIndex, err)
+	}
+
+	fullLogicalStripeBuffer := make([]byte, bytesPerFullStripe)
+	for i := 0; i < numDataShards; i++ {
+		copy(fullLogicalStripeBuffer[i*r.stripeSz:(i+1)*r.stripeSz], rsShards[i])
+	}
+
 	startOffsetInTargetStripe := (originalWriteOffset + partialDataOffsetInInput) % bytesPerFullStripe
 
-	// Source data: data[partialDataOffsetInInput : partialDataOffsetInInput+remainingBytes]
-	// Destination: fullLogicalStripeBuffer
-	// Destination offset: startOffsetInTargetStripe
-	// Length: remainingBytes
 	copy(fullLogicalStripeBuffer[startOffsetInTargetStripe:startOffsetInTargetStripe+remainingBytes], data[partialDataOffsetInInput:partialDataOffsetInInput+remainingBytes])
 
-	// 3. Re-distribute modified data and Recalculate Parity
-	newParityChunk := make([]byte, r.stripeSz)
-	dataChunkCursor = 0
+	newShards, err := rsutil.EncodeStripeShards(fullLogicalStripeBuffer, r.stripeSz, r.encoder, numDataShards, numParityShards)
+	if err != nil {
+		return fmt.Errorf("RAID5: failed to re-encode shards for stripe %d during RMW: %w", targetStripeIndex, err)
+	}
 
+	logicalDataShardCounter = 0
 	for d := 0; d < numDisks; d++ {
 		if d == parityDiskIdxForThisStripe {
-			continue
+			r.disks[d].Data[targetStripeIndex] = newShards[numDataShards]
+		} else {
+			r.disks[d].Data[targetStripeIndex] = newShards[logicalDataShardCounter]
+			logicalDataShardCounter++
 		}
-
-		newDataChunk := fullLogicalStripeBuffer[dataChunkCursor*r.stripeSz : (dataChunkCursor+1)*r.stripeSz]
-		currentStripeChunks[d] = newDataChunk
-
-		// Accumulate XOR for parity
-		for byteIdx := 0; byteIdx < r.stripeSz; byteIdx++ {
-			newParityChunk[byteIdx] ^= newDataChunk[byteIdx]
-		}
-		dataChunkCursor++
 	}
 
-	// Set the new parity chunk
-	currentStripeChunks[parityDiskIdxForThisStripe] = newParityChunk
-
-	// 4. Write new data chunks and new parity chunk back to disks
-	for d := 0; d < numDisks; d++ {
-		r.disks[d].Data[targetStripeIndex] = currentStripeChunks[d] // Overwrite existing chunk
-	}
-
-	logrus.Debugf("[RAID5] Partial write handled for stripe %d. New parity: %v", targetStripeIndex, newParityChunk)
+	logrus.Debugf("[RAID5] Partial write handled for stripe %d. New parity: %v", targetStripeIndex, newShards[numDataShards])
 	return nil
 }
 
+// Read reads data from the RAID5 array.
+// It uses parity to reconstruct data from a single failed disk.
 func (r *RAID5Controller) Read(start, length int) ([]byte, error) {
 	if start < 0 || length < 0 {
 		return nil, fmt.Errorf("read start and length must be non-negative")
 	}
 
-	if len(r.disks) < 3 { // Corrected: r.disks -> r.disks
+	if len(r.disks) < 3 {
 		return nil, fmt.Errorf("RAID5 requires at least 3 disks, got %d", len(r.disks))
 	}
-	if r.stripeSz <= 0 { // Corrected: r.stripeSz -> r.stripeSz
-		return nil, fmt.Errorf("stripe size (chunk unit size) must be greater than 0")
+	if r.stripeSz <= 0 {
+		return nil, fmt.Errorf("stripe size (chunk unit unit size) must be greater than 0")
 	}
 
 	numDisks := len(r.disks)
-	numDataDisks := numDisks - 1
-	bytesPerFullStripe := r.stripeSz * numDataDisks // Corrected: r.stripeSz -> r.stripeSz
+	numDataShards := r.encoderExtension.DataShards()
+	numParityShards := r.encoderExtension.ParityShards()
+	bytesPerFullStripe := r.stripeSz * numDataShards
 
 	if bytesPerFullStripe == 0 {
-		return nil, fmt.Errorf("invalid RAID5 configuration: bytes per full stripe is zero (check StripeSz or diskCount)")
+		return nil, fmt.Errorf("invalid RAID5 configuration: bytes per full stripe is zero (check stripeSz or diskCount)")
 	}
 
 	// Determine the maximum logical stripe index that has ever been written across the array.
-	// This should not be limited by a single failed disk's zero length, as data can be reconstructed.
 	maxWrittenLogicalStripeIdx := -1
 	for _, disk := range r.disks {
 		if len(disk.Data)-1 > maxWrittenLogicalStripeIdx {
@@ -266,7 +230,6 @@ func (r *RAID5Controller) Read(start, length int) ([]byte, error) {
 		}
 	}
 
-	// If maxWrittenLogicalStripeIdx is still -1, it means no data has been written at all.
 	if maxWrittenLogicalStripeIdx == -1 {
 		return []byte{}, fmt.Errorf("no data has been written to the RAID array yet to read from")
 	}
@@ -298,62 +261,45 @@ func (r *RAID5Controller) Read(start, length int) ([]byte, error) {
 
 	// Iterate through each required stripe
 	for currentStripeIdx := startStripeIdx; currentStripeIdx <= endStripeIdx; currentStripeIdx++ {
-		parityDiskIdx := currentStripeIdx % numDisks
 
-		failedDisksInStripe := []int{} // Stores IDs of disks that are considered failed for this specific stripe
+		physicalShards := make([][]byte, numDisks)
 
-		stripeChunks := make(map[int][]byte)
-
-		// First pass: identify failed disks and collect available chunks
 		for d := 0; d < numDisks; d++ {
-			if currentStripeIdx >= len(r.disks[d].Data) || r.disks[d].Data[currentStripeIdx] == nil || len(r.disks[d].Data[currentStripeIdx]) == 0 { // Corrected: r.disks -> r.disks
-				failedDisksInStripe = append(failedDisksInStripe, d)
-				logrus.Debugf("Disk %d considered failed for stripe %d", d, currentStripeIdx)
+			if currentStripeIdx >= len(r.disks[d].Data) || r.disks[d].Data[currentStripeIdx] == nil || len(r.disks[d].Data[currentStripeIdx]) == 0 {
+				physicalShards[d] = nil // mark as lost
+				logrus.Debugf("Disk %d considered failed for stripe %d during read.", d, currentStripeIdx)
 			} else {
 				chunkCopy := make([]byte, r.stripeSz)
 				copy(chunkCopy, r.disks[d].Data[currentStripeIdx])
-				stripeChunks[d] = chunkCopy
+				physicalShards[d] = chunkCopy
 			}
 		}
 
-		if len(failedDisksInStripe) > 1 {
-			return nil, fmt.Errorf("multiple disk failures (%v) detected in stripe %d. Data unrecoverable",
-				failedDisksInStripe, currentStripeIdx)
-		}
+		// RAID5 parity rotation
+		parityDiskIdxForThisStripe := currentStripeIdx % numDisks
 
-		// If exactly one disk failed, reconstruct its data/parity
-		if len(failedDisksInStripe) == 1 {
-			failedDiskIdx := failedDisksInStripe[0]
-			reconstructedChunk := make([]byte, r.stripeSz)
-
-			// XOR all available chunks (both data and parity if parity is available)
-			// to reconstruct the missing one.
-			for d, chunk := range stripeChunks {
-				if len(chunk) != r.stripeSz {
-					return nil, fmt.Errorf("chunk on disk %d for stripe %d has unexpected size %d, expected %d",
-						d, currentStripeIdx, len(chunk), r.stripeSz)
-				}
-				for byteIdx := 0; byteIdx < r.stripeSz; byteIdx++ {
-					reconstructedChunk[byteIdx] ^= chunk[byteIdx]
-				}
-			}
-			stripeChunks[failedDiskIdx] = reconstructedChunk // Add reconstructed chunk to the map
-			logrus.Warnf("Reconstructed chunk for disk %d in stripe %d. Content (first byte): %d",
-				failedDiskIdx, currentStripeIdx, reconstructedChunk[0])
-		}
-
-		// Assemble the logical data for the current stripe from the data chunks
-		currentStripeLogicalData := make([]byte, 0, bytesPerFullStripe)
+		rsShards := make([][]byte, numDataShards+numParityShards)
+		logicalDataShardCounter := 0
 		for d := 0; d < numDisks; d++ {
-			if d == parityDiskIdx {
-				continue // Skip the parity chunk; it's not part of the logical user data
+			if d == parityDiskIdxForThisStripe {
+				rsShards[numDataShards] = physicalShards[d]
+			} else {
+				rsShards[logicalDataShardCounter] = physicalShards[d]
+				logicalDataShardCounter++
 			}
-			dataChunk, ok := stripeChunks[d]
-			if !ok || dataChunk == nil || len(dataChunk) != r.stripeSz {
-				// This indicates a severe internal inconsistency or unhandled multiple failure.
-				return nil, fmt.Errorf("internal error: failed to retrieve or reconstruct data chunk for disk %d in stripe %d", d, currentStripeIdx)
+		}
+
+		err := rsutil.ReconstructStripeShards(rsShards, r.encoder, numParityShards)
+		if err != nil {
+			return nil, fmt.Errorf("RAID5: failed to reconstruct data for stripe %d: %w", currentStripeIdx, err)
+		}
+
+		currentStripeLogicalData := make([]byte, 0, bytesPerFullStripe)
+		for i := 0; i < numDataShards; i++ {
+			if rsShards[i] == nil || len(rsShards[i]) != r.stripeSz {
+				return nil, fmt.Errorf("RAID5 internal error: logical data shard %d for stripe %d is nil or malformed after reconstruction", i, currentStripeIdx)
 			}
-			currentStripeLogicalData = append(currentStripeLogicalData, dataChunk...)
+			currentStripeLogicalData = append(currentStripeLogicalData, rsShards[i]...)
 		}
 
 		startCopyOffset := 0
@@ -386,22 +332,33 @@ func (r *RAID5Controller) Read(start, length int) ([]byte, error) {
 	return result, nil
 }
 
+// ClearDisk simulates a disk failure by clearing the data on the specified disk.
 func (r *RAID5Controller) ClearDisk(index int) error {
 	if index < 0 || index >= len(r.disks) {
 		return fmt.Errorf("disk index %d out of bounds for %d disks", index, len(r.disks))
 	}
 
-	r.disks[index].Data = [][]byte{}
+	r.disks[index].Data = [][]byte{} // Clear the data to simulate failure
 	logrus.Infof("Disk %d has been cleared (simulating failure).", index)
 	return nil
 }
 
+// Raid5SimulationFlow is a helper function to simulate a write, clear, and read cycle for RAID5.
+// This function is typically placed in a _test.go file or a separate simulation package.
+// For demonstration, it's included here.
 func Raid5SimulationFlow(input string, diskCount int, stripeSz int, clearTarget int) {
+	initialOffset := 0
+
 	raid, err := NewRAID5Controller(diskCount, stripeSz)
 	if err != nil {
 		logrus.Errorf("[RAID5] Init Raid5 controller failed: %v", err)
+		return // Exit if controller initialization fails
 	}
-	raid.Write([]byte(input), initialOffset)
+	err = raid.Write([]byte(input), initialOffset)
+	if err != nil {
+		logrus.Errorf("[RAID5] Write failed: %v", err)
+		return // Exit if write fails
+	}
 	logrus.Infof("[RAID5] Write done: %s", input)
 
 	// First read
@@ -413,8 +370,12 @@ func Raid5SimulationFlow(input string, diskCount int, stripeSz int, clearTarget 
 	}
 
 	// Clear disk
-	raid.ClearDisk(1)
-	logrus.Infof("[RAID5] Disk 1 cleared")
+	err = raid.ClearDisk(clearTarget) // Use clearTarget parameter
+	if err != nil {
+		logrus.Errorf("[RAID5] ClearDisk failed for disk %d: %v", clearTarget, err)
+		return
+	}
+	logrus.Infof("[RAID5] Disk %d cleared", clearTarget)
 
 	// Read again
 	output, err = raid.Read(0, len(input))

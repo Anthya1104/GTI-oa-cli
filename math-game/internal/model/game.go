@@ -27,8 +27,12 @@ type Game struct {
 func (g *Game) Start(ctx context.Context) {
 	logrus.Infof("Teacher: Guys, are you ready?")
 
-	// This sleep simulates the 3-second countdown
-	for i := 3; i > 0; i-- {
+	countdownSeconds := int(g.Teacher.WaitTime.Seconds())
+	if countdownSeconds <= 0 {
+		countdownSeconds = 3
+	}
+
+	for i := countdownSeconds; i > 0; i-- {
 		select {
 		case <-ctx.Done():
 			logrus.Warnf("Game interrupted during countdown.")

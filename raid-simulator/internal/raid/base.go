@@ -38,8 +38,9 @@ func RunRAIDSimulation(raidType RaidType, input string) {
 		Raid0SimulationFlow(input, diskCount, stripeSz, clearTarget)
 	case RaidTypeRaid1:
 		diskCount := 2
+		stripeSz := 1
 		clearTarget := 0
-		Raid1SimulationFlow(input, diskCount, clearTarget)
+		Raid1SimulationFlow(input, diskCount, stripeSz, clearTarget)
 	case RaidTypeRaid10:
 		totalDisks := 4
 		stripeSz := 4

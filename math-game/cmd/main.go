@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"math/rand"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/Anthya1104/math-game-cli/internal/cobra"
@@ -23,6 +26,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigCh
+		logrus.Infof("Received signal: %s. Initiating graceful shutdown...", sig)
+		cancel()
+	}()
+
 	students := []*model.Student{
 		model.NewStudent("A", 1),
 		model.NewStudent("B", 2),
@@ -40,10 +56,22 @@ func main() {
 	}
 
 	game := model.Game{
-		Students:  students,
-		Teacher:   teacher,
-		MaxRounds: 1,
+		Students:        students,
+		Teacher:         teacher,
+		MaxRounds:       3,
+		StudentActioner: &model.DefaultStudentActioner{},
 	}
-	game.Start()
+
+	gameDone := game.Start(ctx)
+
+	select {
+	case <-ctx.Done():
+		logrus.Infof("The game play has been interrupted, exiting the game.")
+	case <-gameDone:
+		logrus.Infof("All game rounds finished, exiting the game.")
+	}
+	time.Sleep(1 * time.Second)
+
+	logrus.Infof("Game application finished.")
 
 }

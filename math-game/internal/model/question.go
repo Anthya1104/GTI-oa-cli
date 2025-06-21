@@ -44,13 +44,26 @@ func (q Question) String() string {
 }
 
 func NewQuestion(id int) (*Question, error) {
-	a := rand.Intn(101)
-	b := rand.Intn(101)
-	op := Operators[rand.Intn(len(Operators))]
+	var ans int
+	var err error
+	var a, b int
+	var op Operator
 
-	ans, err := op.Apply(a, b)
-	if err != nil {
-		return nil, err
+	// Loop to ensure we don't get a "divide by zero" error or other issues
+	for {
+		a = rand.Intn(101)
+		b = rand.Intn(101)
+		op = Operators[rand.Intn(len(Operators))]
+
+		// Prevent division by zero: if operator is '/' and b is 0, regenerate
+		if op == "/" && b == 0 {
+			continue
+		}
+
+		ans, err = op.Apply(a, b)
+		if err == nil {
+			break
+		}
 	}
 
 	return &Question{
@@ -63,9 +76,10 @@ func NewQuestion(id int) (*Question, error) {
 	}, nil
 }
 
+// AnswerEvent represents a student's answer submission.
 type AnswerEvent struct {
 	Student *Student
 	Answer  int
-	QID     int // question ids
+	QID     int // Question ID to link the answer to a specific question
 	Time    time.Time
 }

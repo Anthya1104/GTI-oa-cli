@@ -4,7 +4,15 @@ import (
 	"testing"
 
 	"github.com/Anthya1104/math-game-cli/internal/model"
+	"github.com/sirupsen/logrus"
 )
+
+func init() {
+	logrus.SetLevel(logrus.DebugLevel)
+	logrus.SetFormatter(&logrus.TextFormatter{
+		FullTimestamp: true,
+	})
+}
 
 func TestNewTeacher(t *testing.T) {
 	name := "Mr. John"

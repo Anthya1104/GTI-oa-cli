@@ -26,6 +26,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	maxRounds := cobra.GetMaxRoundsFlag()
+	if maxRounds <= 0 {
+		logrus.Warnf("Invalid MaxRounds value '%d' from CLI. Defaulting to 5 rounds.", maxRounds)
+		maxRounds = 1
+	}
+
 	// graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -38,6 +44,16 @@ func main() {
 		logrus.Infof("Received signal: %s. Initiating graceful shutdown...", sig)
 		cancel()
 	}()
+
+	runGame(ctx, maxRounds)
+
+	time.Sleep(1 * time.Second)
+
+	logrus.Infof("Game application finished.")
+
+}
+
+func runGame(ctx context.Context, maxRounds int) {
 
 	students := []*model.Student{
 		model.NewStudent("A", 1),
@@ -58,7 +74,7 @@ func main() {
 	game := model.Game{
 		Students:        students,
 		Teacher:         teacher,
-		MaxRounds:       3,
+		MaxRounds:       maxRounds,
 		StudentActioner: &model.DefaultStudentActioner{},
 	}
 
@@ -70,8 +86,5 @@ func main() {
 	case <-gameDone:
 		logrus.Infof("All game rounds finished, exiting the game.")
 	}
-	time.Sleep(1 * time.Second)
-
-	logrus.Infof("Game application finished.")
 
 }

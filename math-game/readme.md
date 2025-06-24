@@ -14,10 +14,12 @@ This is a CLI (Command Line Interface) math game application developed in Go. In
 
 ```
 git clone <Your project link, if any>
-cd math-game-cli # Or your project's root directory
+cd math-game # Or your project's root directory
 ```
 
-#### 2. Build the executable:
+> You can also build the binary refer to readme.md in the main root dir `./GTI-oa-cli`, the files would be collected inside `./GTI-oa-cli/bin` dir
+
+#### 2. Build the binary:
 
 ```
 go build -o math_game_app cmd/main.go

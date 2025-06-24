@@ -30,19 +30,19 @@ Execute the built application. You can specify the maximum number of rounds for 
 - Run with default rounds (1 rounds):
 
 ```
-./math_game_app
+./math_game_app play
 ```
 
 - Run with a specified number of rounds (e.g., 10 rounds):
 
 ```
-./math_game_app --rounds 10
+./math_game_app play --rounds 10
 ```
 
 - Or shorthand
 
 ```
-./math_game_app -r 10
+./math_game_app play -r 10
 ```
 
 ### Running Tests

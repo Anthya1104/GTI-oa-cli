@@ -40,12 +40,24 @@ This project uses the following Go language libraries:
 
 ## 3. How to Use (CLI Flags)
 
+Make suer you've cloned the project and go to the root dir of raid-simulator project:
+
+```
+./GTI-oa-cli<or_your_local_dir_for_any>/raid-simulator
+```
+
+Build the binary
+
+```
+go build -o raid_simulator cmd/main.go
+```
+
 To run the RAID simulation, you can use the command-line interface provided by the project.
 
 Command Structure:
 
 ```
-go run main.go raid --type <RAID_TYPE> --data <INPUT_DATA>
+./raid_simulator raid --type <RAID_TYPE> --data <INPUT_DATA>
 ```
 
 ### Parameter Description:
@@ -70,31 +82,31 @@ go run main.go raid --type <RAID_TYPE> --data <INPUT_DATA>
 Run RAID0 simulation:
 
 ```
-go run main.go raid --type raid0 --data "HelloRAID0World"
+./raid_simulator raid --type raid0 --data "HelloRAID0World"
 ```
 
 Run RAID1 simulation:
 
 ```
-go run main.go raid --type raid1 --data "MirrorMirrorOnTheWall"
+./raid_simulator raid --type raid1 --data "MirrorMirrorOnTheWall"
 ```
 
 Run RAID10 simulation:
 
 ```
-go run main.go raid --type raid10 --data "RAID10IsFastAndSafe"
+./raid_simulator raid --type raid10 --data "RAID10IsFastAndSafe"
 ```
 
 Run RAID5 simulation:
 
 ```
-go run main.go raid --type raid5 --data "RAID5WithParityProtection"
+./raid_simulator raid --type raid5 --data "RAID5WithParityProtection"
 ```
 
 Run RAID6 simulation:
 
 ```
-go run main.go raid --type raid6 --data "RAID6DoubleFaultTolerant"
+./raid_simulator raid --type raid6 --data "RAID6DoubleFaultTolerant"
 ```
 
 Version Information:
@@ -102,8 +114,10 @@ Version Information:
 You can also check the application's version information:
 
 ```
-go run main.go version
+./raid_simulator main.go version
 ```
+
+> You can also build the binary refer to readme.md in the main root dir `./GTI-oa-cli`, the files would be collected inside `./GTI-oa-cli/bin` dir
 
 ## 4. TODO List (Expansion Directions)
 

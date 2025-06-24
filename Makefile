@@ -23,13 +23,13 @@ init:
 
 
 # math-game builds
-define build_math-game
+define build_math_game
 build-math-game-$(1)-$(2): init
 	@echo "Building math-game for $(1)/$(2) (version: $(VERSION))..."
 	@mkdir -p $(BIN_DIR)/$(MATH_GAME_DIR)/log
 	cd $(MATH_GAME_DIR) && GOOS=$(1) GOARCH=$(2) go build -ldflags="-X '${PROJECT_ROOT_DIR}/$(MATH_GAME_DIR)-cli/${CONFIG_PATH}.Version=$(VERSION)'" -o ../$(BIN_DIR)/$(MATH_GAME_DIR)/math_game_app_$(1)_$(2)$(if $(filter windows,$(1)),.exe,) ./cmd/main.go
 endef
-$(foreach OS,$(OS_LIST),$(foreach ARCH,$(ARCH_LIST),$(eval $(call build_math-game,$(OS),$(ARCH)))))
+$(foreach OS,$(OS_LIST),$(foreach ARCH,$(ARCH_LIST),$(eval $(call build_math_game,$(OS),$(ARCH)))))
 
 
 
@@ -48,16 +48,24 @@ define build_raid_simulator
 build-raid-simulator-$(1)-$(2): init
 	@echo "Building raid-simulator for $(1)/$(2) (version: $(VERSION))..."
 	@mkdir -p $(BIN_DIR)/$(RAID_SIMULATOR_DIR)/log
-	cd $(RAID_SIMULATOR_DIR) && GOOS=$(1) GOARCH=$(2) go build -ldflags="-X '${PROJECT_ROOT_DIR}/$(RAID_SIMULATOR_DIR)-cli/${CONFIG_PATH}.Version=$(VERSION)'" -o ../$(BIN_DIR)/$(RAID_SIMULATOR_DIR)/raid_simulator_app_$(1)_$(2)$(if $(filter windows,$(1)),.exe,) ./cmd/main.go
+	cd $(RAID_SIMULATOR_DIR) && GOOS=$(1) GOARCH=$(2) go build -ldflags="-X '${PROJECT_ROOT_DIR}/$(RAID_SIMULATOR_DIR)/${CONFIG_PATH}.Version=$(VERSION)'" -o ../$(BIN_DIR)/$(RAID_SIMULATOR_DIR)/raid_simulator_app_$(1)_$(2)$(if $(filter windows,$(1)),.exe,) ./cmd/main.go
 endef
 $(foreach OS,$(OS_LIST),$(foreach ARCH,$(ARCH_LIST),$(eval $(call build_raid_simulator,$(OS),$(ARCH)))))
 
 
 # build all platforms for all projects
 all: init
-	$(foreach OS,$(OS_LIST),$(foreach ARCH,$(ARCH_LIST),$(MAKE) build-math-game-$(OS)-$(ARCH);))
-	$(foreach OS,$(OS_LIST),$(foreach ARCH,$(ARCH_LIST),$(MAKE) build-quorum-election-$(OS)-$(ARCH);))
-	$(foreach OS,$(OS_LIST),$(foreach ARCH,$(ARCH_LIST),$(MAKE) build-raid-simulator-$(OS)-$(ARCH);))
+	$(foreach OS,$(OS_LIST),$(foreach ARCH,$(ARCH_LIST),$(MAKE) build-math-game-$(OS)-$(ARCH) VERSION=$(VERSION);))
+	$(foreach OS,$(OS_LIST),$(foreach ARCH,$(ARCH_LIST),$(MAKE) build-quorum-election-$(OS)-$(ARCH) VERSION=$(VERSION);))
+	$(foreach OS,$(OS_LIST),$(foreach ARCH,$(ARCH_LIST),$(MAKE) build-raid-simulator-$(OS)-$(ARCH) VERSION=$(VERSION);))
+
+build-math-game-all:
+	$(foreach OS,$(OS_LIST),$(foreach ARCH,$(ARCH_LIST),$(MAKE) build-math-game-$(OS)-$(ARCH) VERSION=$(VERSION);))	
+build-quorum-election-all:
+	$(foreach OS,$(OS_LIST),$(foreach ARCH,$(ARCH_LIST),$(MAKE) build-quorum-election-$(OS)-$(ARCH) VERSION=$(VERSION);))
+
+build-raid-simulator-all:
+	$(foreach OS,$(OS_LIST),$(foreach ARCH,$(ARCH_LIST),$(MAKE) build-raid-simulator-$(OS)-$(ARCH) VERSION=$(VERSION);))
 
 # clean bin dir
 clean:

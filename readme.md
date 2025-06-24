@@ -21,7 +21,7 @@ This Monorepo includes the following three main sub-projects:
 
 - Go 1.18 or higher.
 
-### 🧭 Installation and Build
+### Installation and Build
 
 Clone and build all sub-projects:
 
